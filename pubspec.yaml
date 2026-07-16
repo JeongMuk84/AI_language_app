@@ -42,6 +42,8 @@ dependencies:
   url_launcher: ^6.3.2
   record: ^7.1.1
   audioplayers: ^6.8.1
+  permission_handler: ^11.3.1
+  package_info_plus: ^8.1.2
 
 dev_dependencies:
   flutter_test:
@@ -61,6 +63,11 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Generates the app icon (Windows .ico + Android mipmap sets) from
+  # assets/icon/icon.png — see the `flutter_launcher_icons:` config below.
+  # Run `dart run flutter_launcher_icons` after changing either.
+  flutter_launcher_icons: ^0.14.3
+
 # path_provider_foundation >=2.5.0 depends on package:objective_c, which uses
 # Dart's native-assets build hooks. On this machine the Flutter SDK is
 # installed under a path containing a space ("C:\src\Flutter Project\flutter"),
@@ -70,6 +77,22 @@ dev_dependencies:
 # targets macOS/iOS so the implementation swap is inconsequential.
 dependency_overrides:
   path_provider_foundation: 2.4.1
+
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+  android: true
+  windows:
+    generate: true
+    image_path: "assets/icon/icon.png"
+  ios: false
+  # icon.png has a transparent background (sampled: corner alpha = 0) with
+  # a black-outlined bird mark on it — Android 8+ adaptive icons need an
+  # opaque background layer separately, so a plain white background
+  # (matching what the artwork actually reads as when composited normally)
+  # keeps the mark from being cropped oddly by circular/rounded-square
+  # launcher masks.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/icon.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -86,6 +109,8 @@ flutter:
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/icon/icon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

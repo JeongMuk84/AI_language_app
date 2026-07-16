@@ -116,7 +116,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     }
 
     final item = state.currentItem!;
-    final canPractice = state.hasSubmittedTranslation;
+    // Once the learner has actually gotten the translation right, there's
+    // no reason to let them edit/resubmit it — a wrong (or not-yet-
+    // attempted) translation keeps both editable so they can correct it.
+    final isTranslationCorrect = state.translationResult?.isCorrect ?? false;
     final result = state.pronunciationResult;
     final passed = result != null && result.accuracyPercent >= kPronunciationPassThreshold;
 
@@ -143,7 +146,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                     const SizedBox(height: 24),
                     TextField(
                       controller: _controller,
-                      enabled: !state.isSubmittingTranslation && !canPractice,
+                      enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
                       minLines: 1,
                       maxLines: 3,
                       decoration: const InputDecoration(
@@ -152,17 +155,18 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    if (!canPractice)
-                      FilledButton(
-                        onPressed: state.isSubmittingTranslation ? null : _submit,
-                        child: state.isSubmittingTranslation
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Submit'),
-                      ),
+                    FilledButton(
+                      onPressed: (state.isSubmittingTranslation || isTranslationCorrect)
+                          ? null
+                          : _submit,
+                      child: state.isSubmittingTranslation
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Submit'),
+                    ),
                     if (state.translationError != null) ...[
                       const SizedBox(height: 16),
                       Text(
@@ -194,7 +198,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                     Center(
                       child: AudioPlayButton(
                         key: ValueKey('play-${state.currentIndex}'),
-                        enabled: canPractice,
+                        // Always enabled from screen entry — unlike
+                        // submission/pronunciation, there's no reason
+                        // hearing the sentence needs to wait on anything.
                         // Cache-only — never falls back to a fresh TTS
                         // call. `buildReviewSet` already guaranteed this
                         // sentence has cached audio; if it's since gone
@@ -220,7 +226,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                     Center(
                       child: AudioRecorderWidget(
                         key: ValueKey('record-${state.currentIndex}'),
-                        enabled: canPractice,
+                        // Always enabled from screen entry — see
+                        // AudioPlayButton above.
                         onRecordingComplete: _onRecordingComplete,
                       ),
                     ),

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:record/record.dart';
 
 const _waveformSampleCount = 48;
@@ -57,8 +58,17 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
   }
 
   Future<void> _start() async {
+    // On Android/iOS this triggers the native OS permission prompt the
+    // first time (package:record calls straight through to
+    // ActivityCompat.requestPermissions under the hood); on Windows/other
+    // desktop platforms record has no OS permission model and this always
+    // resolves to true.
     final hasPermission = await _recorder.hasPermission();
-    if (!hasPermission || !mounted) return;
+    if (!mounted) return;
+    if (!hasPermission) {
+      await _showPermissionDeniedMessage();
+      return;
+    }
 
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
@@ -82,6 +92,35 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
         if (_samples.length > _waveformSampleCount) _samples.removeFirst();
       });
     });
+  }
+
+  /// Shown when [_recorder.hasPermission] came back false. On Android/iOS,
+  /// checks whether the OS considers the denial permanent (e.g. the learner
+  /// already dismissed the system prompt once, or ticked "Don't ask
+  /// again") via `permission_handler` — record itself only exposes a plain
+  /// bool, with no way to tell "ask again" apart from "only Settings can
+  /// fix this now". permission_handler has no Windows/Linux/macOS
+  /// implementation, so this stays entirely off those platforms; record's
+  /// own `hasPermission` already always returns true there (no OS
+  /// permission model to deny in the first place), so this message should
+  /// never actually show up outside mobile.
+  Future<void> _showPermissionDeniedMessage() async {
+    var permanentlyDenied = false;
+    if (Platform.isAndroid || Platform.isIOS) {
+      final status = await ph.Permission.microphone.status;
+      permanentlyDenied = status.isPermanentlyDenied;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Microphone permission is required to record your pronunciation.',
+        ),
+        action: permanentlyDenied
+            ? SnackBarAction(label: 'Settings', onPressed: ph.openAppSettings)
+            : null,
+      ),
+    );
   }
 
   Future<void> _stop() async {

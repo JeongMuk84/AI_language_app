@@ -119,7 +119,7 @@ class MyApp extends ConsumerWidget {
 
     return themeModeAsync.when(
       data: (mode) => MaterialApp.router(
-        title: 'AI Language App',
+        title: 'La Fly',
         theme: themeDataFor(mode),
         routerConfig: router,
       ),

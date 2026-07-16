@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../models/app_config.dart';
 import '../theme/app_theme.dart';
@@ -29,6 +32,31 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   late AppThemeMode _themeMode = AppThemeMode.fromConfigValue(
     widget.initialConfig.effectiveThemeMode,
   );
+
+  /// Null until `PackageInfo.fromPlatform()` resolves — the version line
+  /// shows a placeholder until then rather than leaving the dialog waiting
+  /// on it before it can even open.
+  PackageInfo? _packageInfo;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadPackageInfo());
+  }
+
+  Future<void> _loadPackageInfo() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) setState(() => _packageInfo = info);
+  }
+
+  /// Version + build number read straight from `pubspec.yaml`'s `version`
+  /// field (e.g. `1.0.0+1`) via `PackageInfo` — never hardcoded, so bumping
+  /// a release only means editing pubspec.yaml.
+  String _versionLabel() {
+    final info = _packageInfo;
+    if (info == null) return 'Version …';
+    return 'Version ${info.version} (${info.buildNumber})';
+  }
 
   @override
   void dispose() {
@@ -112,6 +140,17 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
             const Divider(),
             const SizedBox(height: 12),
             HoldToResetButton(onConfirmed: _resetAllData),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+            // Quiet footer info, not a setting — reuses `labelSmall`, which
+            // is already themed to DESIGN.md's secondary-text color
+            // (`slate` in White, `onDarkMuted` in Black) via
+            // `onSurfaceMuted` in app_theme.dart, so it's never hardcoded
+            // here and stays correct if those tokens ever change.
+            Text('Created by JeongMuk84', style: Theme.of(context).textTheme.labelSmall),
+            const SizedBox(height: 2),
+            Text(_versionLabel(), style: Theme.of(context).textTheme.labelSmall),
           ],
         ),
       ),

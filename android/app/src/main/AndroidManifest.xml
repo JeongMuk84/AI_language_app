@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- GeminiService talks to the Gemini API over HTTPS. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- AudioRecorderWidget records pronunciation attempts via package:record. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
-        android:label="ai_language_app"
+        android:label="La Fly"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
