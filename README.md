@@ -18,17 +18,37 @@ samples, guidance on mobile development, and a full API reference.
 
 ## Development
 
+### Daily learning limit & TTS caching
+
+Gemini's free-tier TTS quota is small, so the app self-limits to stay
+within it:
+
+- **10 turns/day** (5 shadowing + 5 writing). Completing the 10th turn
+  auto-finalizes the session exactly like "학습 종료" would. The current
+  count shows as "Today: N/10" in each learning screen's AppBar.
+- **One TTS call per sentence.** Synthesized audio is cached on disk
+  (`tts_cache/`, keyed by sentence + target language) and only fetched lazily
+  when the play button is first tapped — replays, retries, and resuming a
+  session across app restarts all reuse the cached clip instead of calling
+  Gemini again. Capped at 100 cached sentences, least-recently-used evicted
+  first.
+- Each newly-synthesized sentence gets a random voice from the official
+  Gemini TTS voice list (`lib/constants/tts_voices.dart`); a cached replay
+  keeps whatever voice it was first synthesized with.
+
 ### Resetting local state
 
 The app persists state in a few places: the Gemini API key (secure
 storage), `config.json` (theme, native/target language, difficulty level),
-the in-progress learning session, and saved history files. For testing,
-you can wipe any combination of these on startup with `--dart-define`
-flags, applied in `main.dart` before normal startup routing runs.
+the in-progress learning session, saved history files, today's turn
+counter (`daily_progress.json`), and the cached TTS audio (`tts_cache/`).
+For testing, you can wipe any combination of these on startup with
+`--dart-define` flags, applied in `main.dart` before normal startup
+routing runs.
 
 | Flag | Clears |
 | --- | --- |
-| `RESET_APP=true` | Everything: API key, config.json, session state, history, and handoff files |
+| `RESET_APP=true` | Everything: API key, config.json, session state, history, handoff files, the daily turn counter, and the TTS cache |
 | `RESET_KEY=true` | Only the API key |
 | `RESET_SESSION=true` | Only the in-progress session state |
 | `RESET_HISTORY=true` | Only the saved history files |

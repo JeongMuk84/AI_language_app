@@ -15,9 +15,14 @@ const _samplingInterval = Duration(milliseconds: 80);
 /// with no separate submit step — automatically hands the recorded bytes to
 /// [onRecordingComplete].
 class AudioRecorderWidget extends StatefulWidget {
-  const AudioRecorderWidget({super.key, required this.onRecordingComplete});
+  const AudioRecorderWidget({super.key, required this.onRecordingComplete, this.enabled = true});
 
   final ValueChanged<Uint8List> onRecordingComplete;
+
+  /// When false, renders the record button inert (no tap, dimmed) — e.g.
+  /// ReviewScreen disables this until the learner has submitted a
+  /// translation, so pronunciation practice can't happen before that.
+  final bool enabled;
 
   @override
   State<AudioRecorderWidget> createState() => _AudioRecorderWidgetState();
@@ -127,7 +132,7 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
         const SizedBox(height: 12),
         IconButton.filled(
           iconSize: 40,
-          onPressed: _isProcessing ? null : _toggle,
+          onPressed: (widget.enabled && !_isProcessing) ? _toggle : null,
           icon: _isProcessing
               ? const SizedBox(
                   height: 24,

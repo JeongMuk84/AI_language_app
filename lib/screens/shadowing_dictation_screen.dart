@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../constants/learning_constants.dart';
+import '../providers/service_providers.dart';
 import '../viewmodels/shadowing_view_model.dart';
 import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
+import '../widgets/end_session_button.dart';
 import '../widgets/feedback_box.dart';
 import '../widgets/sentence_analysis_box.dart';
 
@@ -44,24 +47,43 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
     setState(() => _audioInstanceKey++);
   }
 
-  void _goToPronunciation() {
-    context.go('/learning/shadowing/pronunciation');
+  Future<void> _goToPronunciation() async {
+    final sessionService = ref.read(sessionStateServiceProvider);
+    final session = await sessionService.readState();
+    if (session != null) {
+      await sessionService.advanceToSecondSubStep(session);
+    }
+    if (mounted) context.go('/learning/shadowing/pronunciation');
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(shadowingViewModelProvider);
+    final progressLabel = ref
+        .watch(dailyTurnCountProvider)
+        .maybeWhen(
+          data: (count) => 'Today: ${displayedDailyTurnNumber(count)}/$kDailyTurnLimit',
+          orElse: () => null,
+        );
 
     if (state.isLoadingSentence) {
       return Scaffold(
-        appBar: buildAppBarWithSettings(context, 'Shadowing: Listen & Write'),
+        appBar: buildAppBarWithSettings(
+          context,
+          'Shadowing: Listen & Write',
+          progressLabel: progressLabel,
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (state.loadError != null) {
       return Scaffold(
-        appBar: buildAppBarWithSettings(context, 'Shadowing: Listen & Write'),
+        appBar: buildAppBarWithSettings(
+          context,
+          'Shadowing: Listen & Write',
+          progressLabel: progressLabel,
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -82,7 +104,11 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
     }
 
     return Scaffold(
-      appBar: buildAppBarWithSettings(context, 'Shadowing: Listen & Write'),
+      appBar: buildAppBarWithSettings(
+        context,
+        'Shadowing: Listen & Write',
+        progressLabel: progressLabel,
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -92,7 +118,7 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
               Center(
                 child: AudioPlayButton(
                   key: ValueKey(_audioInstanceKey),
-                  audioBytes: state.ttsAudio!,
+                  audioLoader: () => ref.read(geminiServiceProvider).speakCached(state.sentence!),
                   autoPlay: _audioInstanceKey > 0,
                   tooltip: 'Play sentence',
                 ),
@@ -145,6 +171,8 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
                 onPressed: state.canProceedToPronunciation ? _goToPronunciation : null,
                 child: const Text('Continue to Pronunciation Practice'),
               ),
+              const SizedBox(height: 12),
+              const EndSessionButton(),
             ],
           ),
         ),

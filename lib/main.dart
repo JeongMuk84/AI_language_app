@@ -6,7 +6,9 @@ import 'services/api_key_storage_service.dart';
 import 'services/config_service.dart';
 import 'services/handoff_service.dart';
 import 'services/history_service.dart';
+import 'services/review_history_service.dart';
 import 'services/session_state_service.dart';
+import 'services/tts_cache_service.dart';
 import 'theme/app_theme.dart';
 import 'viewmodels/theme_mode_view_model.dart';
 import 'widgets/restart_widget.dart';
@@ -15,10 +17,13 @@ import 'widgets/restart_widget.dart';
 /// See README.md's "Development" section for usage examples.
 ///
 /// `RESET_APP=true` clears everything (API key, config.json, session
-/// state, history, handoff files) — equivalent to the three flags below
-/// combined, plus config.json and handoff files (which have no flag of
-/// their own since a partial reset that drops native/target language
-/// wouldn't be a meaningful "full" reset).
+/// state, history, handoff files, the daily turn counter, the TTS cache,
+/// review history, and any in-progress review) — equivalent to the three
+/// flags below combined, plus config.json, handoff files, daily progress,
+/// the TTS cache, and review data (none of which have a flag of their own
+/// since a partial reset that drops native/target language, or leaves the
+/// daily limit/cache/review state stale, wouldn't be a meaningful "full"
+/// reset).
 const _resetApp = bool.fromEnvironment('RESET_APP');
 
 /// Clears only the secure-storage API key.
@@ -57,6 +62,10 @@ Future<void> applyResetFlags({required ConfigService configService}) async {
     'session state': _resetApp || _resetSession,
     'history': _resetApp || _resetHistory,
     'handoff files': _resetApp,
+    'daily progress': _resetApp,
+    'TTS cache': _resetApp,
+    'review history': _resetApp,
+    'review progress': _resetApp,
   };
 
   if (!targets.values.any((shouldClear) => shouldClear)) {
@@ -69,14 +78,27 @@ Future<void> applyResetFlags({required ConfigService configService}) async {
   if (targets['config.json']!) {
     await configService.clearConfig();
   }
+  final sessionStateService = SessionStateService();
   if (targets['session state']!) {
-    await SessionStateService().clearSession();
+    await sessionStateService.clearSession();
   }
   if (targets['history']!) {
     await HistoryService().clearHistory();
   }
   if (targets['handoff files']!) {
     await HandoffService().clearHandoffFiles();
+  }
+  if (targets['daily progress']!) {
+    await sessionStateService.clearDailyProgress();
+  }
+  if (targets['TTS cache']!) {
+    await TtsCacheService().clearCache();
+  }
+  if (targets['review history']!) {
+    await ReviewHistoryService().clearHistory();
+  }
+  if (targets['review progress']!) {
+    await sessionStateService.clearReviewProgress();
   }
 
   final cleared = targets.entries.where((e) => e.value).map((e) => e.key).join(', ');

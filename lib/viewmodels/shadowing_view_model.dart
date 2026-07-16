@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../constants/learning_constants.dart';
 import '../models/conversation_turn.dart';
 import '../models/dictation_result.dart';
 import '../models/exercise_type.dart';
@@ -9,6 +10,7 @@ import '../models/pronunciation_result.dart';
 import '../providers/service_providers.dart';
 import '../services/gemini_service.dart';
 import '../utils/id_utils.dart';
+import 'sentence_hidden_toggle_mixin.dart';
 
 class ShadowingState {
   const ShadowingState({
@@ -16,7 +18,6 @@ class ShadowingState {
     this.loadError,
     this.turnId,
     this.sentence,
-    this.ttsAudio,
     this.isSubmittingDictation = false,
     this.dictationResult,
     this.dictationError,
@@ -31,7 +32,6 @@ class ShadowingState {
   final String? loadError;
   final String? turnId;
   final String? sentence;
-  final Uint8List? ttsAudio;
 
   final bool isSubmittingDictation;
   final DictationResult? dictationResult;
@@ -64,7 +64,6 @@ class ShadowingState {
       loadError: loadError,
       turnId: turnId,
       sentence: sentence,
-      ttsAudio: ttsAudio,
       isSubmittingDictation: isSubmittingDictation ?? this.isSubmittingDictation,
       dictationResult: clearDictationResult ? null : (dictationResult ?? this.dictationResult),
       dictationError: clearDictationError ? null : (dictationError ?? this.dictationError),
@@ -84,7 +83,8 @@ class ShadowingState {
 /// Backs both ShadowingDictationScreen and ShadowingPronunciationScreen —
 /// they work on the same sentence/turn, so they share one view-model
 /// instance rather than round-tripping data through navigation arguments.
-class ShadowingViewModel extends Notifier<ShadowingState> {
+class ShadowingViewModel extends Notifier<ShadowingState>
+    with SentenceHiddenToggleMixin<ShadowingState> {
   @override
   ShadowingState build() => const ShadowingState();
 
@@ -113,17 +113,19 @@ class ShadowingViewModel extends Notifier<ShadowingState> {
         await sessionService.setCurrentSentence(session, sentence: sentence, turnId: turnId);
       }
 
-      final audio = await gemini.synthesizeSpeech(sentence);
-
-      state = ShadowingState(
-        isLoadingSentence: false,
-        turnId: turnId,
-        sentence: sentence,
-        ttsAudio: audio,
-      );
+      state = ShadowingState(isLoadingSentence: false, turnId: turnId, sentence: sentence);
     } catch (e) {
       state = ShadowingState(isLoadingSentence: false, loadError: _messageFor(e));
     }
+  }
+
+  /// Resumes into an in-progress sentence if this screen mounts without
+  /// one already loaded (e.g. app restart landed directly on
+  /// ShadowingPronunciationScreen) — a no-op otherwise, so it's safe to
+  /// call unconditionally from that screen's `initState`.
+  Future<void> ensureSentenceLoaded() async {
+    if (state.sentence != null) return;
+    await loadSentence();
   }
 
   Future<void> submitDictation(String userInput) async {
@@ -148,18 +150,18 @@ class ShadowingViewModel extends Notifier<ShadowingState> {
     state = state.copyWith(clearDictationResult: true, clearDictationError: true);
   }
 
-  /// "문장 보지 않고 녹음하기" / "문장 보기" toggle. Hiding starts a fresh
-  /// pronunciation attempt; revealing again doesn't touch it.
-  void toggleSentenceHidden() {
-    if (!state.sentenceHidden) {
-      state = state.copyWith(
-        sentenceHidden: true,
-        clearPronunciationResult: true,
-        clearPronunciationError: true,
-      );
-    } else {
-      state = state.copyWith(sentenceHidden: false);
-    }
+  @override
+  bool sentenceHiddenOf(ShadowingState state) => state.sentenceHidden;
+
+  @override
+  ShadowingState copyWithSentenceHidden(ShadowingState state, {required bool hidden}) {
+    return hidden
+        ? state.copyWith(
+            sentenceHidden: true,
+            clearPronunciationResult: true,
+            clearPronunciationError: true,
+          )
+        : state.copyWith(sentenceHidden: false);
   }
 
   Future<void> analyzePronunciation(Uint8List audioBytes) async {
@@ -177,7 +179,12 @@ class ShadowingViewModel extends Notifier<ShadowingState> {
 
   /// "다음으로 넘어가기": records this shadowing turn and switches the active
   /// exercise type to writing.
-  Future<void> completeTurnAndAdvanceToWriting() async {
+  ///
+  /// Returns true if this turn just hit [kDailyTurnLimit] — the caller
+  /// should return to the entry-routing screen instead of continuing to
+  /// the next exercise, since the session was auto-finalized here exactly
+  /// like "학습 종료" would.
+  Future<bool> completeTurnAndAdvanceToWriting() async {
     final sessionService = ref.read(sessionStateServiceProvider);
     var session = await sessionService.readState();
     session ??= await sessionService.startNewSession(initialType: ExerciseType.shadowing);
@@ -196,6 +203,26 @@ class ShadowingViewModel extends Notifier<ShadowingState> {
       turn: turn,
       nextType: ExerciseType.writing,
     );
+
+    // Track this sentence for spaced review — a no-op if it's already
+    // tracked (e.g. a retried/re-encountered sentence).
+    final dictationResult = state.dictationResult;
+    if (state.sentence != null && dictationResult != null) {
+      await ref
+          .read(reviewHistoryServiceProvider)
+          .recordIfNew(
+            sentenceInTarget: state.sentence!,
+            sentenceInNative: dictationResult.translation,
+          );
+    }
+
+    final newCount = await sessionService.incrementDailyTurnCount();
+    ref.invalidate(dailyTurnCountProvider);
+    if (newCount >= kDailyTurnLimit) {
+      await ref.read(historyServiceProvider).finalizeSession();
+      return true;
+    }
+    return false;
   }
 
   String _messageFor(Object e) {

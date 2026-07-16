@@ -10,6 +10,7 @@ class ConversationTurn {
     this.sentenceInTarget,
     this.sentenceInNative,
     this.userAnswer,
+    this.completedSentence,
     this.isCorrect,
     this.pronunciationScore,
   });
@@ -22,6 +23,7 @@ class ConversationTurn {
       sentenceInTarget: json['sentenceInTarget'] as String?,
       sentenceInNative: json['sentenceInNative'] as String?,
       userAnswer: json['userAnswer'] as String?,
+      completedSentence: json['completedSentence'] as String?,
       isCorrect: json['isCorrect'] as bool?,
       pronunciationScore: (json['pronunciationScore'] as num?)?.toDouble(),
     );
@@ -33,6 +35,13 @@ class ConversationTurn {
   final String? sentenceInTarget;
   final String? sentenceInNative;
   final String? userAnswer;
+
+  /// Writing turns only: [userAnswer] with any native-language segments
+  /// replaced by their target-language equivalent (see
+  /// `TranslationResult.completedSentence`) — the sentence actually
+  /// displayed/spoken/graded on WritingListeningScreen, kept here for
+  /// future conversation-context and review-selection use.
+  final String? completedSentence;
   final bool? isCorrect;
 
   /// 0-100.
@@ -45,6 +54,7 @@ class ConversationTurn {
         if (sentenceInTarget != null) 'sentenceInTarget': sentenceInTarget,
         if (sentenceInNative != null) 'sentenceInNative': sentenceInNative,
         if (userAnswer != null) 'userAnswer': userAnswer,
+        if (completedSentence != null) 'completedSentence': completedSentence,
         if (isCorrect != null) 'isCorrect': isCorrect,
         if (pronunciationScore != null) 'pronunciationScore': pronunciationScore,
       };
@@ -62,6 +72,7 @@ class ConversationTurn {
       sentenceInTarget: sentenceInTarget,
       sentenceInNative: sentenceInNative,
       userAnswer: userAnswer ?? this.userAnswer,
+      completedSentence: completedSentence,
       isCorrect: isCorrect ?? this.isCorrect,
       pronunciationScore: pronunciationScore ?? this.pronunciationScore,
     );

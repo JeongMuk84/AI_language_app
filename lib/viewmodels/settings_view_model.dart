@@ -121,15 +121,21 @@ class SettingsViewModel extends Notifier<SettingsState> {
   }
 
   /// Wipes every piece of saved app state: the API key, config.json, the
-  /// in-progress session, all history files, and all per-language handoff
-  /// files. The caller is responsible for restarting the app afterward
-  /// (via `RestartWidget`) so everything re-derives from scratch.
+  /// in-progress session, all history files, all per-language handoff
+  /// files, the daily turn counter, the TTS cache, review history, and any
+  /// in-progress review. The caller is responsible for restarting the app
+  /// afterward (via `RestartWidget`) so everything re-derives from scratch.
   Future<void> resetAllData() async {
+    final sessionStateService = ref.read(sessionStateServiceProvider);
     await ref.read(apiKeyStorageServiceProvider).clearApiKey();
     await ref.read(configServiceProvider).clearConfig();
-    await ref.read(sessionStateServiceProvider).clearSession();
+    await sessionStateService.clearSession();
     await ref.read(historyServiceProvider).clearHistory();
     await ref.read(handoffServiceProvider).clearHandoffFiles();
+    await sessionStateService.clearDailyProgress();
+    await ref.read(ttsCacheServiceProvider).clearCache();
+    await ref.read(reviewHistoryServiceProvider).clearHistory();
+    await sessionStateService.clearReviewProgress();
   }
 }
 

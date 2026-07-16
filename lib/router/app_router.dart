@@ -2,17 +2,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../models/exercise_type.dart';
+import '../models/learning_sub_step.dart';
+import '../models/review_progress.dart';
 import '../providers/service_providers.dart';
 import '../screens/api_key_screen.dart';
 import '../screens/language_select_screen.dart';
 import '../screens/learning_screen.dart';
 import '../screens/level_test_screen.dart';
-import '../screens/review_placeholder_screen.dart';
+import '../screens/review_screen.dart';
 import '../screens/shadowing_dictation_screen.dart';
 import '../screens/shadowing_pronunciation_screen.dart';
 import '../screens/writing_listening_screen.dart';
 import '../screens/writing_screen.dart';
 import '../services/history_service.dart';
+import '../services/review_session_service.dart';
 import '../services/session_state_service.dart';
 import '../viewmodels/conversation_session_view_model.dart';
 
@@ -56,6 +59,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   final conversationSession = ref.read(conversationSessionProvider.notifier);
   final sessionStateService = ref.read(sessionStateServiceProvider);
   final historyService = ref.read(historyServiceProvider);
+  final reviewSessionService = ref.read(reviewSessionServiceProvider);
 
   return GoRouter(
     initialLocation: AppRoutes.apiKey,
@@ -101,6 +105,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       return _resolveLearningEntryRoute(
         sessionStateService: sessionStateService,
         historyService: historyService,
+        reviewSessionService: reviewSessionService,
       );
     },
     routes: [
@@ -111,10 +116,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: AppRoutes.levelTest, builder: (context, state) => const LevelTestScreen()),
       GoRoute(path: AppRoutes.learning, builder: (context, state) => const LearningScreen()),
-      GoRoute(
-        path: AppRoutes.review,
-        builder: (context, state) => const ReviewPlaceholderScreen(),
-      ),
+      GoRoute(path: AppRoutes.review, builder: (context, state) => const ReviewScreen()),
       GoRoute(
         path: AppRoutes.shadowingDictation,
         builder: (context, state) => const ShadowingDictationScreen(),
@@ -132,18 +134,42 @@ final routerProvider = Provider<GoRouter>((ref) {
   );
 });
 
+/// Starts a new learning session continuing from whichever exercise type
+/// the learner didn't finish on last time (shadowing, if none yet), and
+/// returns the route for its entry screen. The single place this decision
+/// is made — shared by the router (when there's nothing left to review)
+/// and ReviewScreen (finishing/skipping review), so it exists in exactly
+/// one place rather than being reimplemented at each call site.
+Future<String> startNextLearningSession({
+  required SessionStateService sessionStateService,
+  required HistoryService historyService,
+}) async {
+  final lastType = await historyService.getLastExerciseType();
+  final nextType = (lastType ?? ExerciseType.writing).other;
+  await sessionStateService.startNewSession(initialType: nextType);
+  return nextType == ExerciseType.shadowing
+      ? AppRoutes.shadowingDictation
+      : AppRoutes.writing;
+}
+
 /// Section 3 of the core-learning-loop spec: decides where to land when
 /// entering `/learning`.
 ///
 /// (A) An in-progress session exists: same local calendar day -> resume
-///     straight into the persisted exercise type's entry screen. A
-///     different day (midnight passed) -> finalize it exactly like
-///     "학습 종료" would, then fall through to (B).
-/// (B) No in-progress session: no history at all -> brand new session,
-///     start at shadowing. Otherwise -> ReviewPlaceholderScreen.
+///     straight into the persisted exercise type + sub-step's screen (e.g.
+///     shadowing pronunciation, not dictation, if that's where the learner
+///     was — see `LearningSubStep`). A different day (midnight passed) ->
+///     finalize it exactly like "학습 종료" would, then fall through to (B).
+/// (B) No in-progress session: an in-progress review exists (same local
+///     calendar day) -> resume it. No review in progress but there's
+///     history -> build a fresh review set; empty (nothing reviewable) ->
+///     skip straight to (C); otherwise persist it and go review. No
+///     history at all -> (C) with shadowing.
+/// (C) Start a new learning session (see `startNextLearningSession`).
 Future<String> _resolveLearningEntryRoute({
   required SessionStateService sessionStateService,
   required HistoryService historyService,
+  required ReviewSessionService reviewSessionService,
 }) async {
   final session = await sessionStateService.readState();
 
@@ -154,12 +180,19 @@ Future<String> _resolveLearningEntryRoute({
         startedAt.year == now.year && startedAt.month == now.month && startedAt.day == now.day;
 
     if (sameDay) {
-      return session.currentExerciseType == ExerciseType.shadowing
-          ? AppRoutes.shadowingDictation
-          : AppRoutes.writing;
+      final onSecondSubStep = session.currentSubStep == LearningSubStep.second;
+      if (session.currentExerciseType == ExerciseType.shadowing) {
+        return onSecondSubStep ? AppRoutes.shadowingPronunciation : AppRoutes.shadowingDictation;
+      }
+      return onSecondSubStep ? AppRoutes.writingListening : AppRoutes.writing;
     }
 
     await historyService.finalizeSession();
+  }
+
+  final reviewProgress = await sessionStateService.readReviewProgress();
+  if (reviewProgress != null) {
+    return AppRoutes.review;
   }
 
   final hasHistory = await historyService.hasAnyHistory();
@@ -168,5 +201,16 @@ Future<String> _resolveLearningEntryRoute({
     return AppRoutes.shadowingDictation;
   }
 
+  final reviewSet = await reviewSessionService.buildReviewSet();
+  if (reviewSet.isEmpty) {
+    return startNextLearningSession(
+      sessionStateService: sessionStateService,
+      historyService: historyService,
+    );
+  }
+
+  await sessionStateService.writeReviewProgress(
+    ReviewProgress(reviewItemList: reviewSet, reviewCurrentIndex: 0, startedAt: DateTime.now()),
+  );
   return AppRoutes.review;
 }

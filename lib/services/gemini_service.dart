@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../constants/learning_constants.dart';
+import '../constants/tts_voices.dart';
 import '../models/conversation_turn.dart';
 import '../models/dictation_result.dart';
 import '../models/exercise_type.dart';
@@ -16,6 +17,7 @@ import '../models/translation_result.dart';
 import '../utils/wav_utils.dart';
 import 'api_key_storage_service.dart';
 import 'config_service.dart';
+import 'tts_cache_service.dart';
 
 /// Classification of why a Gemini call failed, used to pick a
 /// user-facing message and to decide how the UI should react.
@@ -71,9 +73,11 @@ class GeminiService {
     http.Client? client,
     ApiKeyStorageService? apiKeyStorage,
     ConfigService? configService,
+    TtsCacheService? ttsCacheService,
   }) : _client = client ?? http.Client(),
        _apiKeyStorage = apiKeyStorage ?? ApiKeyStorageService(),
-       _configService = configService ?? ConfigService();
+       _configService = configService ?? ConfigService(),
+       _ttsCache = ttsCacheService ?? TtsCacheService();
 
   static const _model = 'gemini-flash-lite-latest';
 
@@ -89,6 +93,7 @@ class GeminiService {
   final http.Client _client;
   final ApiKeyStorageService _apiKeyStorage;
   final ConfigService _configService;
+  final TtsCacheService _ttsCache;
 
   /// Requests currently in flight, keyed by a signature of method+args.
   /// A second call with the same signature while the first is still
@@ -326,23 +331,64 @@ Return ONLY raw JSON, no markdown fences:
 Translation check. The learner is translating FROM $nativeLanguage TO
 $targetLanguage.
 Native ($nativeLanguage) sentence given to the learner: "$nativeSentence"
-Learner's $targetLanguage translation attempt: "$userTranslation"
+Learner's attempt: "$userTranslation"
 
-Judge by MEANING, not exact wording — accept any natural, correct
-translation. Note grammar/word-choice issues in the feedback. Do NOT echo
-the native sentence or the learner's attempt back in the JSON — the app
-already has both; only return the two fields below.
+IMPORTANT: the learner's attempt may mix languages — they write the parts
+they know in $targetLanguage and fall back to $nativeLanguage for words or
+phrases they don't know yet (e.g. a $nativeLanguage speaker learning
+Vietnamese might write "Tôi muốn 예약하다 nhà hàng", mixing $nativeLanguage
+into an otherwise $targetLanguage sentence). This is expected learning
+behavior, not an error: a $nativeLanguage segment means "the learner
+doesn't know this yet," not "the learner got this wrong."
+
+Grading rule: judge correctness based on the $targetLanguage portion(s) of
+the attempt only — their grammar, word choice, and whether they fit
+meaningfully into the sentence. Do NOT mark the answer wrong purely because
+part of it is in $nativeLanguage; that part is simply ungraded here and
+instead surfaced below as a learning opportunity.
+
+If any part of the attempt is in $nativeLanguage, identify each such
+segment (exactly as the learner wrote it) and, for each, provide how to say
+it in $targetLanguage plus a short nuance/alternatives note. If the entire
+attempt is already in $targetLanguage, return an empty array for
+"mixedLanguageSegments".
+
+Also produce "completedSentence": the learner's own attempt rewritten
+entirely in $targetLanguage, with every $nativeLanguage segment replaced by
+its $targetLanguage equivalent so the whole thing reads as one natural
+$targetLanguage sentence (adjust grammar/word order around the substitution
+as needed rather than pasting the replacement in verbatim if that would
+read unnaturally). If the attempt was already entirely in $targetLanguage,
+"completedSentence" is that same sentence (fix obvious typos only, don't
+otherwise rewrite it).
+
+Do NOT echo the native sentence back in the JSON — the app already has it;
+only return the fields below.
 
 Field-by-field language rules (do not mix these up):
-- "feedback": 1-2 sentences on grammar/wording, written in $nativeLanguage.
+- "feedback": 1-2 sentences on grammar/wording of the $targetLanguage
+  portion, written in $nativeLanguage.
 - "referenceTranslation": a natural, correct translation of the native
-  sentence, written ENTIRELY in $targetLanguage. This is the exact sentence
-  the learner will read/say aloud next — it must be the translated
-  sentence itself, NOT a $nativeLanguage explanation of it.
+  sentence, written ENTIRELY in $targetLanguage. This is a model answer for
+  comparison only — it is NOT what gets read/said aloud next (that's
+  "completedSentence" below).
+- "mixedLanguageSegments[].originalSegment": the $nativeLanguage text
+  exactly as the learner wrote it.
+- "mixedLanguageSegments[].suggestedTranslation": how to say that segment,
+  written ENTIRELY in $targetLanguage.
+- "mixedLanguageSegments[].explanation": nuance or alternative phrasings,
+  written in $nativeLanguage.
+- "completedSentence": the learner's own sentence, ENTIRELY in
+  $targetLanguage as described above. This IS the exact sentence the
+  learner will read/say aloud next, so it must be natural and complete —
+  never a $nativeLanguage explanation.
 
 Return ONLY raw JSON, no markdown fences:
-{"isCorrect":true|false,"feedback":"1-2 sentences in $nativeLanguage on grammar/wording",
-"referenceTranslation":"a natural, correct $targetLanguage translation"}
+{"isCorrect":true|false,
+"feedback":"1-2 sentences in $nativeLanguage on the $targetLanguage portion's grammar/wording",
+"referenceTranslation":"a natural, correct $targetLanguage translation",
+"mixedLanguageSegments":[{"originalSegment":"...exactly as the learner wrote it","suggestedTranslation":"...in $targetLanguage","explanation":"...in $nativeLanguage"}],
+"completedSentence":"the learner's sentence, entirely in $targetLanguage"}
 ''';
       final text = await _generateText(apiKey, prompt, label: 'validateTranslation');
       final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
@@ -396,15 +442,20 @@ Return ONLY raw JSON, no markdown fences:
     });
   }
 
-  /// Synthesizes [text] to speech and returns playable WAV bytes.
+  /// Synthesizes [text] to speech using [voice] (a name from
+  /// [kGeminiTtsVoices]) and returns playable WAV bytes.
   ///
   /// Not verified against a live Gemini API key in this environment — the
   /// TTS response is documented to return raw PCM inline audio, which this
   /// wraps in a WAV header (see [pcm16ToWav]) so `audioplayers` can play
   /// it directly from memory. If Gemini's actual response shape differs,
   /// adjust the parsing here.
-  Future<Uint8List> synthesizeSpeech(String text) async {
-    return _dedupe('synthesizeSpeech:$text', () async {
+  ///
+  /// Prefer [speakCached] over calling this directly — it's the same
+  /// synthesis, but reuses a cached clip instead of re-spending a TTS call
+  /// when one already exists for the sentence.
+  Future<Uint8List> synthesizeSpeech(String text, {required String voice}) async {
+    return _dedupe('synthesizeSpeech:$voice:$text', () async {
       final apiKey = await _requireApiKey();
       final decoded = await _generateContent(
         apiKey,
@@ -416,7 +467,7 @@ Return ONLY raw JSON, no markdown fences:
           'responseModalities': ['AUDIO'],
           'speechConfig': {
             'voiceConfig': {
-              'prebuiltVoiceConfig': {'voiceName': 'Kore'},
+              'prebuiltVoiceConfig': {'voiceName': voice},
             },
           },
         },
@@ -442,6 +493,36 @@ Return ONLY raw JSON, no markdown fences:
       final pcmBytes = base64Decode(base64Data);
       final sampleRate = _parseSampleRate(mimeType) ?? 24000;
       return pcm16ToWav(pcmBytes, sampleRate: sampleRate);
+    });
+  }
+
+  /// Returns playable WAV bytes for [sentence] (always target-language —
+  /// TTS is only ever used for target-language content in this app),
+  /// reusing a cached clip when one already exists instead of spending a
+  /// TTS call. A cache miss picks a fresh random voice from
+  /// [kGeminiTtsVoices] and stores the result under it; a cache hit keeps
+  /// whichever voice the sentence was originally synthesized with, so the
+  /// same sentence doesn't change voice between replays.
+  Future<Uint8List> speakCached(String sentence) async {
+    final config = await _configService.readConfig();
+    final targetLanguage = config.targetLanguage ?? 'the target language';
+    return _dedupe('speakCached:$targetLanguage:$sentence', () async {
+      final cached = await _ttsCache.get(sentence: sentence, language: targetLanguage);
+      if (cached != null) {
+        _log('speakCached: hit (voice=${cached.voice})');
+        return cached.audioBytes;
+      }
+
+      final voice = randomTtsVoice();
+      _log('speakCached: miss, synthesizing with voice=$voice');
+      final bytes = await synthesizeSpeech(sentence, voice: voice);
+      await _ttsCache.put(
+        sentence: sentence,
+        language: targetLanguage,
+        audioBytes: bytes,
+        voice: voice,
+      );
+      return bytes;
     });
   }
 

@@ -26,4 +26,10 @@ class PronunciationResult {
 
   /// 0-100.
   final double accuracyPercent;
+
+  Map<String, dynamic> toJson() => {
+        'recognizedText': recognizedText,
+        'feedback': feedback,
+        'accuracyPercent': accuracyPercent,
+      };
 }

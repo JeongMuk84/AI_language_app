@@ -10,55 +10,127 @@ import '../viewmodels/writing_view_model.dart';
 import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
 import '../widgets/audio_recorder_widget.dart';
+import '../widgets/end_session_button.dart';
 import '../widgets/feedback_box.dart';
+import '../widgets/hideable_sentence.dart';
 
-class WritingListeningScreen extends ConsumerWidget {
+class WritingListeningScreen extends ConsumerStatefulWidget {
   const WritingListeningScreen({super.key});
 
-  Future<void> _onRecordingComplete(WidgetRef ref, Uint8List bytes) {
+  @override
+  ConsumerState<WritingListeningScreen> createState() => _WritingListeningScreenState();
+}
+
+class _WritingListeningScreenState extends ConsumerState<WritingListeningScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // A no-op unless the app restarted straight onto this screen (resuming
+    // mid-listening) without WritingScreen having loaded the translation
+    // into the shared view-model yet this session.
+    Future.microtask(() => ref.read(writingViewModelProvider.notifier).resumeListeningIfNeeded());
+  }
+
+  Future<void> _onRecordingComplete(Uint8List bytes) {
     return ref.read(writingViewModelProvider.notifier).analyzePronunciation(bytes);
   }
 
-  void _retry(WidgetRef ref) {
+  void _retry() {
     ref.read(writingViewModelProvider.notifier).resetPronunciationAttempt();
   }
 
-  Future<void> _next(BuildContext context, WidgetRef ref) async {
-    await ref.read(writingViewModelProvider.notifier).completeTurnAndAdvanceToShadowing();
-    if (context.mounted) context.go('/learning/shadowing/dictation');
+  void _toggleHideSentence() {
+    ref.read(writingViewModelProvider.notifier).toggleSentenceHidden();
   }
 
-  Future<void> _endSession(BuildContext context, WidgetRef ref) async {
-    await ref.read(historyServiceProvider).finalizeSession();
-    if (context.mounted) context.go('/learning');
+  Future<void> _next() async {
+    final limitReached = await ref
+        .read(writingViewModelProvider.notifier)
+        .completeTurnAndAdvanceToShadowing();
+    if (!mounted) return;
+    context.go(limitReached ? '/learning' : '/learning/shadowing/dictation');
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final state = ref.watch(writingViewModelProvider);
+    final progressLabel = ref
+        .watch(dailyTurnCountProvider)
+        .maybeWhen(
+          data: (count) => 'Today: ${displayedDailyTurnNumber(count)}/$kDailyTurnLimit',
+          orElse: () => null,
+        );
+
+    if (state.isLoadingSentence) {
+      return Scaffold(
+        appBar: buildAppBarWithSettings(
+          context,
+          'Writing: Listen & Pronounce',
+          progressLabel: progressLabel,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (state.loadError != null) {
+      return Scaffold(
+        appBar: buildAppBarWithSettings(
+          context,
+          'Writing: Listen & Pronounce',
+          progressLabel: progressLabel,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(state.loadError!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: () => context.go('/learning'),
+                  child: const Text('Back to Start'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final result = state.pronunciationResult;
     final passed = result != null && result.accuracyPercent >= kPronunciationPassThreshold;
 
     return Scaffold(
-      appBar: buildAppBarWithSettings(context, 'Writing: Listen & Pronounce'),
+      appBar: buildAppBarWithSettings(
+        context,
+        'Writing: Listen & Pronounce',
+        progressLabel: progressLabel,
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (state.referenceAudio != null)
+              if (state.completedSentence != null)
+                HideableSentence(sentence: state.completedSentence!, hidden: state.sentenceHidden),
+              const SizedBox(height: 24),
+              if (state.completedSentence != null)
                 Center(
                   child: AudioPlayButton(
-                    audioBytes: state.referenceAudio!,
-                    tooltip: 'Play correct translation',
+                    // Plays the completed (fully target-language) form of
+                    // what the learner submitted, not the model answer —
+                    // matches the sentence text above and
+                    // `analyzePronunciation`'s comparison target below.
+                    audioLoader: () =>
+                        ref.read(geminiServiceProvider).speakCached(state.completedSentence!),
+                    tooltip: 'Play your translation',
                   ),
                 ),
               const SizedBox(height: 24),
               Center(
-                child: AudioRecorderWidget(
-                  onRecordingComplete: (bytes) => _onRecordingComplete(ref, bytes),
-                ),
+                child: AudioRecorderWidget(onRecordingComplete: _onRecordingComplete),
               ),
               const SizedBox(height: 24),
               if (state.isAnalyzingPronunciation)
@@ -91,17 +163,16 @@ class WritingListeningScreen extends ConsumerWidget {
                 ],
               ],
               const SizedBox(height: 24),
-              OutlinedButton(onPressed: () => _retry(ref), child: const Text('Try Again')),
+              SentenceVisibilityButton(hidden: state.sentenceHidden, onPressed: _toggleHideSentence),
+              const SizedBox(height: 12),
+              OutlinedButton(onPressed: _retry, child: const Text('Try Again')),
               const SizedBox(height: 12),
               FilledButton(
-                onPressed: passed ? () => _next(context, ref) : null,
+                onPressed: passed ? _next : null,
                 child: const Text('Continue'),
               ),
               const SizedBox(height: 12),
-              TextButton(
-                onPressed: () => _endSession(context, ref),
-                child: const Text('End Session'),
-              ),
+              const EndSessionButton(),
             ],
           ),
         ),
