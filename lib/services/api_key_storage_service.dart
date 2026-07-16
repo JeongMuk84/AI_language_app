@@ -18,6 +18,7 @@ class ApiKeyStorageService {
   }
 
   /// Wipes everything this app has written to secure storage (currently
-  /// just the API key). Used by the `RESET_APP` dev/test flag.
-  Future<void> deleteAll() => _storage.deleteAll();
+  /// just the API key). Used by the `RESET_APP`/`RESET_KEY` dev/test flags
+  /// and Settings' "Reset All Data".
+  Future<void> clearApiKey() => _storage.deleteAll();
 }

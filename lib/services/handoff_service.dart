@@ -31,4 +31,23 @@ class HandoffService {
     final file = await _fileFor(language);
     await file.writeAsString(jsonEncode(data.toJson()));
   }
+
+  /// Deletes every language's handoff file. Used by the `RESET_APP` dev/
+  /// test flag and Settings' "Reset All Data".
+  Future<void> clearHandoffFiles() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final entries = await dir.list().toList();
+    for (final entry in entries) {
+      if (entry is! File) continue;
+      final name = _basename(entry.path);
+      if (name.startsWith('handoff_') && name.endsWith('.json')) {
+        await entry.delete();
+      }
+    }
+  }
+
+  String _basename(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized.substring(normalized.lastIndexOf('/') + 1);
+  }
 }

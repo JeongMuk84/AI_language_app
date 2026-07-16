@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../viewmodels/language_select_view_model.dart';
-import '../widgets/settings_icon_button.dart';
+import '../widgets/app_bar_with_settings.dart';
 
 class LanguageSelectScreen extends ConsumerStatefulWidget {
   const LanguageSelectScreen({super.key});
@@ -37,10 +37,7 @@ class _LanguageSelectScreenState extends ConsumerState<LanguageSelectScreen> {
     final state = ref.watch(languageSelectViewModelProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Select Languages'),
-        actions: const [SettingsIconButton()],
-      ),
+      appBar: buildAppBarWithSettings(context, 'Select Languages'),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),

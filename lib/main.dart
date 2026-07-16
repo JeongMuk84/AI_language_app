@@ -4,15 +4,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'router/app_router.dart';
 import 'services/api_key_storage_service.dart';
 import 'services/config_service.dart';
+import 'services/handoff_service.dart';
+import 'services/history_service.dart';
+import 'services/session_state_service.dart';
 import 'theme/app_theme.dart';
 import 'viewmodels/theme_mode_view_model.dart';
 import 'widgets/restart_widget.dart';
 
-/// Dev/test convenience: `flutter run --dart-define=RESET_APP=true` wipes
-/// all saved state (the secure-storage API key, config.json) before the app
-/// starts, so normal startup routing lands back on ApiKeyScreen. No effect
-/// when the flag is absent/false.
-const _resetAppOnStart = bool.fromEnvironment('RESET_APP');
+/// Dev/test convenience flags, applied before normal startup routing runs.
+/// See README.md's "Development" section for usage examples.
+///
+/// `RESET_APP=true` clears everything (API key, config.json, session
+/// state, history, handoff files) — equivalent to the three flags below
+/// combined, plus config.json and handoff files (which have no flag of
+/// their own since a partial reset that drops native/target language
+/// wouldn't be a meaningful "full" reset).
+const _resetApp = bool.fromEnvironment('RESET_APP');
+
+/// Clears only the secure-storage API key.
+const _resetKey = bool.fromEnvironment('RESET_KEY');
+
+/// Clears only the in-progress session state.
+const _resetSession = bool.fromEnvironment('RESET_SESSION');
+
+/// Clears only the saved history files.
+const _resetHistory = bool.fromEnvironment('RESET_HISTORY');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,17 +36,54 @@ Future<void> main() async {
   final configService = ConfigService();
   debugPrint('[ai_language_app] config.json path: ${await configService.configFilePath()}');
 
-  if (_resetAppOnStart) {
-    debugPrint('[ai_language_app] RESET_APP=true — clearing all saved state...');
-    await ApiKeyStorageService().deleteAll();
-    await configService.deleteConfig();
-    debugPrint('[ai_language_app] Reset complete.');
-  }
+  await applyResetFlags(configService: configService);
 
   runApp(
     const RestartWidget(
       child: ProviderScope(child: MyApp()),
     ),
+  );
+}
+
+/// Applies whichever `RESET_*` dart-defines were passed, before any normal
+/// routing logic runs. Each resource is cleared through the owning
+/// service's own `clear*` method — the same ones Settings' "Reset All
+/// Data" button uses — so this is just flag-reading glue, not a second
+/// copy of the reset logic.
+Future<void> applyResetFlags({required ConfigService configService}) async {
+  final targets = <String, bool>{
+    'API Key': _resetApp || _resetKey,
+    'config.json': _resetApp,
+    'session state': _resetApp || _resetSession,
+    'history': _resetApp || _resetHistory,
+    'handoff files': _resetApp,
+  };
+
+  if (!targets.values.any((shouldClear) => shouldClear)) {
+    return;
+  }
+
+  if (targets['API Key']!) {
+    await ApiKeyStorageService().clearApiKey();
+  }
+  if (targets['config.json']!) {
+    await configService.clearConfig();
+  }
+  if (targets['session state']!) {
+    await SessionStateService().clearSession();
+  }
+  if (targets['history']!) {
+    await HistoryService().clearHistory();
+  }
+  if (targets['handoff files']!) {
+    await HandoffService().clearHandoffFiles();
+  }
+
+  final cleared = targets.entries.where((e) => e.value).map((e) => e.key).join(', ');
+  final preserved = targets.entries.where((e) => !e.value).map((e) => e.key).join(', ');
+  debugPrint(
+    '[RESET] Cleared: $cleared.'
+    '${preserved.isEmpty ? '' : ' Preserved: $preserved.'}',
   );
 }
 

@@ -18,8 +18,9 @@ class ConfigService {
   /// Full path to config.json, for diagnostics/logging.
   Future<String> configFilePath() async => (await _configFile()).path;
 
-  /// Deletes config.json if present. Used by the `RESET_APP` dev/test flag.
-  Future<void> deleteConfig() async {
+  /// Deletes config.json if present. Used by the `RESET_APP` dev/test flag
+  /// and Settings' "Reset All Data".
+  Future<void> clearConfig() async {
     final file = await _configFile();
     if (await file.exists()) {
       await file.delete();

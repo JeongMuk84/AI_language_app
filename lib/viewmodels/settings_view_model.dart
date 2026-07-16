@@ -119,6 +119,18 @@ class SettingsViewModel extends Notifier<SettingsState> {
     state = state.copyWith(isSaving: false);
     return SettingsSaveResult.savedWithRestart;
   }
+
+  /// Wipes every piece of saved app state: the API key, config.json, the
+  /// in-progress session, all history files, and all per-language handoff
+  /// files. The caller is responsible for restarting the app afterward
+  /// (via `RestartWidget`) so everything re-derives from scratch.
+  Future<void> resetAllData() async {
+    await ref.read(apiKeyStorageServiceProvider).clearApiKey();
+    await ref.read(configServiceProvider).clearConfig();
+    await ref.read(sessionStateServiceProvider).clearSession();
+    await ref.read(historyServiceProvider).clearHistory();
+    await ref.read(handoffServiceProvider).clearHandoffFiles();
+  }
 }
 
 final settingsViewModelProvider = NotifierProvider<SettingsViewModel, SettingsState>(

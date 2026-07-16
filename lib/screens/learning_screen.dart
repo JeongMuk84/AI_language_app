@@ -1,18 +1,14 @@
 import 'package:flutter/material.dart';
 
-import '../widgets/settings_icon_button.dart';
-
+/// Bootstrap-only landing spot for `/learning` — the router's redirect
+/// resolves this into the actual destination (a learning-loop screen or
+/// ReviewPlaceholderScreen) almost immediately, so this is rarely visible
+/// for more than a frame.
 class LearningScreen extends StatelessWidget {
   const LearningScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Learning'),
-        actions: const [SettingsIconButton()],
-      ),
-      body: const Center(child: Text('Learning content coming soon.')),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

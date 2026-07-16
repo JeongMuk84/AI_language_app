@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../models/level_test_question.dart';
 import '../viewmodels/level_test_view_model.dart';
-import '../widgets/settings_icon_button.dart';
+import '../widgets/app_bar_with_settings.dart';
 
 class LevelTestScreen extends ConsumerStatefulWidget {
   const LevelTestScreen({super.key});
@@ -55,10 +55,7 @@ class _LevelTestScreenState extends ConsumerState<LevelTestScreen> {
 
     if (state.stage == LevelTestStage.loading) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('Level Test'),
-          actions: const [SettingsIconButton()],
-        ),
+        appBar: buildAppBarWithSettings(context, 'Level Test'),
         body: const Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -74,10 +71,7 @@ class _LevelTestScreenState extends ConsumerState<LevelTestScreen> {
 
     if (state.stage == LevelTestStage.loadError) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('Level Test'),
-          actions: const [SettingsIconButton()],
-        ),
+        appBar: buildAppBarWithSettings(context, 'Level Test'),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -103,10 +97,7 @@ class _LevelTestScreenState extends ConsumerState<LevelTestScreen> {
     _syncControllers(state.questions);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Level Test'),
-        actions: const [SettingsIconButton()],
-      ),
+      appBar: buildAppBarWithSettings(context, 'Level Test'),
       body: SafeArea(
         child: Column(
           children: [

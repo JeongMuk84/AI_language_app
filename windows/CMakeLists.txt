@@ -1,5 +1,5 @@
 # Project-level configuration.
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.15)
 project(ai_language_app LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
@@ -7,8 +7,9 @@ project(ai_language_app LANGUAGES CXX)
 set(BINARY_NAME "ai_language_app")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
-# versions of CMake.
-cmake_policy(VERSION 3.14...3.25)
+# versions of CMake. Bumped to 3.15 for CMP0091, which audioplayers_windows
+# requires when building with recent Visual Studio toolchains.
+cmake_policy(VERSION 3.15...3.25)
 
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
