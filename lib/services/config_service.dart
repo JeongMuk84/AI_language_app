@@ -1,17 +1,22 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/app_config.dart';
+import 'storage_location_service.dart';
 
-/// Reads and writes `config.json` in the app documents directory.
+/// Reads and writes `config.json` in the app's storage directory (see
+/// `StorageLocationService`).
 ///
 /// Never stores the Gemini API key — that belongs in secure storage
 /// (see `ApiKeyStorageService`).
 class ConfigService {
+  ConfigService({StorageLocationService? storageLocationService})
+      : _storageLocationService = storageLocationService ?? StorageLocationService();
+
+  final StorageLocationService _storageLocationService;
+
   Future<File> _configFile() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/config.json');
   }
 

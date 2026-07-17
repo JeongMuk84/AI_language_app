@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:ai_language_app/constants/app_identity.dart';
 import 'package:ai_language_app/services/review_session_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -17,11 +18,24 @@ class _FakePathProvider extends PathProviderPlatform with MockPlatformInterfaceM
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  /// All app data now lives under `<Documents>/$kAppFolderName/` (see
+  /// `StorageLocationService`) rather than directly in the fake documents
+  /// root — this mirrors that one level of nesting so these tests still
+  /// exercise the real (non-mocked) `ReviewSessionService`/
+  /// `TtsCacheService`/`ReviewHistoryService`/`ConfigService` code against
+  /// real files, just at the path those services now actually resolve to.
+  Directory appDir(Directory documentsDir) {
+    final dir = Directory('${documentsDir.path}/$kAppFolderName');
+    dir.createSync(recursive: true);
+    return dir;
+  }
+
   test('buildReviewSet: pool > 15 selects exactly 15 with no duplicates, '
       'and the 10 most-recently-first-learned are always included', () async {
     final tempDir = await Directory.systemTemp.createTemp('review_test');
     PathProviderPlatform.instance = _FakePathProvider(tempDir);
     addTearDown(() => tempDir.delete(recursive: true));
+    final docDir = appDir(tempDir);
 
     // 20 review records, firstLearnedAt spread across 20 distinct days so
     // "most recent 10" is unambiguous. lastReviewedAt left null for all
@@ -38,7 +52,6 @@ void main() {
         },
     ];
     final reviewHistoryRaw = {for (final r in records) r['sentenceInTarget'] as String: r};
-    final docDir = Directory(tempDir.path);
     await File('${docDir.path}/review_history.json').writeAsString(jsonEncode(reviewHistoryRaw));
 
     // TTS cache: every sentence has a cached clip.
@@ -85,6 +98,7 @@ void main() {
     final tempDir = await Directory.systemTemp.createTemp('review_test_small');
     PathProviderPlatform.instance = _FakePathProvider(tempDir);
     addTearDown(() => tempDir.delete(recursive: true));
+    final docDir = appDir(tempDir);
 
     final now = DateTime.now();
     final records = <String, dynamic>{
@@ -96,9 +110,9 @@ void main() {
           'reviewCount': 0,
         },
     };
-    await File('${tempDir.path}/review_history.json').writeAsString(jsonEncode(records));
+    await File('${docDir.path}/review_history.json').writeAsString(jsonEncode(records));
 
-    final cacheDir = Directory('${tempDir.path}/tts_cache')..createSync();
+    final cacheDir = Directory('${docDir.path}/tts_cache')..createSync();
     final manifest = <String, dynamic>{};
     for (var i = 0; i < 5; i++) {
       final fileName = 'clip_$i.wav';
@@ -111,7 +125,7 @@ void main() {
     }
     await File('${cacheDir.path}/manifest.json').writeAsString(jsonEncode(manifest));
     await File(
-      '${tempDir.path}/config.json',
+      '${docDir.path}/config.json',
     ).writeAsString(jsonEncode({'targetLanguage': 'target_language', 'nativeLanguage': 'native'}));
 
     final result = await ReviewSessionService().buildReviewSet();
@@ -122,9 +136,10 @@ void main() {
     final tempDir = await Directory.systemTemp.createTemp('review_test_nocache');
     PathProviderPlatform.instance = _FakePathProvider(tempDir);
     addTearDown(() => tempDir.delete(recursive: true));
+    final docDir = appDir(tempDir);
 
     final now = DateTime.now();
-    await File('${tempDir.path}/review_history.json').writeAsString(
+    await File('${docDir.path}/review_history.json').writeAsString(
       jsonEncode({
         'has_audio': {
           'sentenceInTarget': 'has_audio',
@@ -141,7 +156,7 @@ void main() {
       }),
     );
 
-    final cacheDir = Directory('${tempDir.path}/tts_cache')..createSync();
+    final cacheDir = Directory('${docDir.path}/tts_cache')..createSync();
     await File('${cacheDir.path}/clip.wav').writeAsBytes([0]);
     await File('${cacheDir.path}/manifest.json').writeAsString(
       jsonEncode({
@@ -154,7 +169,7 @@ void main() {
       }),
     );
     await File(
-      '${tempDir.path}/config.json',
+      '${docDir.path}/config.json',
     ).writeAsString(jsonEncode({'targetLanguage': 'target_language', 'nativeLanguage': 'native'}));
 
     final result = await ReviewSessionService().buildReviewSet();

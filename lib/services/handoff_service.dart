@@ -1,16 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/handoff_data.dart';
+import 'storage_location_service.dart';
 
 /// Reads/writes per-language handoff files (`handoff_<language>.json`) in
-/// the app documents directory, used to resume a previously-studied
-/// language without repeating the level test.
+/// the app's storage directory (see `StorageLocationService`), used to
+/// resume a previously-studied language without repeating the level test.
 class HandoffService {
+  HandoffService({StorageLocationService? storageLocationService})
+      : _storageLocationService = storageLocationService ?? StorageLocationService();
+
+  final StorageLocationService _storageLocationService;
+
   Future<File> _fileFor(String language) async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/handoff_${_slug(language)}.json');
   }
 
@@ -35,7 +39,7 @@ class HandoffService {
   /// Deletes every language's handoff file. Used by the `RESET_APP` dev/
   /// test flag and Settings' "Reset All Data".
   Future<void> clearHandoffFiles() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     final entries = await dir.list().toList();
     for (final entry in entries) {
       if (entry is! File) continue;

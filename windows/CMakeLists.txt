@@ -1,10 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.15)
-project(ai_language_app LANGUAGES CXX)
+project(La_Fly LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "ai_language_app")
+set(BINARY_NAME "La_Fly")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake. Bumped to 3.15 for CMP0091, which audioplayers_windows

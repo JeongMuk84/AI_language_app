@@ -14,6 +14,7 @@ import '../models/learning_session_snapshot.dart';
 import '../models/level_test_question.dart';
 import '../models/pronunciation_result.dart';
 import '../models/translation_result.dart';
+import '../models/word_lookup_result.dart';
 import '../utils/wav_utils.dart';
 import 'api_key_storage_service.dart';
 import 'config_service.dart';
@@ -234,7 +235,7 @@ pick up where they left off later. No JSON, no markdown.
         ? history.sublist(history.length - kHistoryContextWindow)
         : history;
     final historyText = recentHistory.isEmpty
-        ? '(first sentence — no prior context)'
+        ? '(first sentence - no prior context)'
         : recentHistory
               .map((t) {
                 final shown = t.type == ExerciseType.shadowing
@@ -259,8 +260,8 @@ $historyText
 
 Write ONE new sentence ENTIRELY in $languageForSentence that naturally
 continues this conversation, suitable for $exerciseHint. IMPORTANT: output
-ONLY the $languageForSentence sentence itself — do not translate it, do not
-add a $nativeLanguage gloss, do not mix languages. Plain text only — no
+ONLY the $languageForSentence sentence itself - do not translate it, do not
+add a $nativeLanguage gloss, do not mix languages. Plain text only - no
 quotes, no labels, no markdown.
 ''';
         final text = await _generateText(apiKey, prompt, label: 'generateNextSentence');
@@ -285,29 +286,49 @@ quotes, no labels, no markdown.
       final prompt = '''
 Dictation check. The learner is studying $targetLanguage (native language:
 $nativeLanguage). The original sentence below is written in $targetLanguage
-— it is NOT in the learner's native language.
+- it is NOT in the learner's native language.
 Original ($targetLanguage): "$original"
 Learner wrote: "$userInput"
 Judge correctness (minor punctuation/capitalization differences OK, wording
 must match). Do NOT echo the original or the learner's answer back in the
-JSON — the app already has both; only return the three fields below.
+JSON - the app already has both; only return the fields below.
+
+ERRORS: if anything the learner wrote differs from the original - wrong
+word, misspelling, wrong spacing, or (for languages that use them) a wrong
+tone/diacritic mark - you MUST report it as a structured entry in "errors".
+NEVER give a vague statement like "there's a typo" with nothing else -
+every issue needs exactly what the learner wrote, what it should be, and
+why. Tone/diacritic mark mistakes are NOT minor: in a tonal language a
+single wrong mark changes the meaning entirely, so name precisely which
+mark goes where. If there are several separate issues, report each as its
+own "errors" entry. Each entry's "shouldBe" is ONLY the corrected word/
+phrase for that specific issue, never the full original sentence. If
+nothing is wrong, return an empty array - do not invent problems that
+aren't there.
 
 Field-by-field language rules (do not mix these up):
-- "feedback": 1-2 sentences on what differs (if anything), written in
-  $nativeLanguage.
+- "feedback": 1-2 sentences of overall comment, written in $nativeLanguage.
+  Point-by-point corrections go in "errors" below, not crammed in here.
 - "translation": a $nativeLanguage translation of the ORIGINAL ($targetLanguage)
   sentence.
 - "analysis": brief notes on key words/structure, written in
   $nativeLanguage, but quote the actual $targetLanguage word or phrase
   first and give its $nativeLanguage meaning in parentheses right after
-  (e.g. "간다(khong đi)") — do not paraphrase the $targetLanguage words away
+  (e.g. "간다(khong đi)") - do not paraphrase the $targetLanguage words away
   entirely.
+- "errors[].userWrote": the exact $targetLanguage word/phrase the learner
+  wrote wrong, quoted verbatim.
+- "errors[].shouldBe": the corrected word/phrase ONLY (not the full
+  sentence), written in $targetLanguage.
+- "errors[].explanation": why, written in $nativeLanguage - for tone/
+  diacritic mistakes, name the specific mark and where it belongs.
 
 Return ONLY raw JSON, no markdown fences:
 {"isCorrect":true|false,
-"feedback":"...in $nativeLanguage",
+"feedback":"1-2 sentences in $nativeLanguage, overall comment only",
 "translation":"...in $nativeLanguage",
-"analysis":"...in $nativeLanguage, with $targetLanguage words quoted + gloss in parentheses"}
+"analysis":"...in $nativeLanguage, with $targetLanguage words quoted + gloss in parentheses",
+"errors":[{"userWrote":"...exactly as written, in $targetLanguage","shouldBe":"...corrected word/phrase only, in $targetLanguage","explanation":"...in $nativeLanguage"}]}
 ''';
       final text = await _generateText(apiKey, prompt, label: 'validateDictation');
       final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
@@ -333,7 +354,7 @@ $targetLanguage.
 Native ($nativeLanguage) sentence given to the learner: "$nativeSentence"
 Learner's attempt: "$userTranslation"
 
-IMPORTANT: the learner's attempt may mix languages — they write the parts
+IMPORTANT: the learner's attempt may mix languages - they write the parts
 they know in $targetLanguage and fall back to $nativeLanguage for words or
 phrases they don't know yet (e.g. a $nativeLanguage speaker learning
 Vietnamese might write "Tôi muốn 예약하다 nhà hàng", mixing $nativeLanguage
@@ -342,10 +363,15 @@ behavior, not an error: a $nativeLanguage segment means "the learner
 doesn't know this yet," not "the learner got this wrong."
 
 Grading rule: judge correctness based on the $targetLanguage portion(s) of
-the attempt only — their grammar, word choice, and whether they fit
+the attempt only - their grammar, word choice, and whether they fit
 meaningfully into the sentence. Do NOT mark the answer wrong purely because
 part of it is in $nativeLanguage; that part is simply ungraded here and
 instead surfaced below as a learning opportunity.
+
+If the attempt is incomplete as a sentence - just a word or two, or a
+phrase that trails off - mark it incorrect ("isCorrect": false) and explain
+in "feedback" what's missing (e.g. no verb, cut off mid-thought), the same
+way you'd explain a grammar mistake.
 
 If any part of the attempt is in $nativeLanguage, identify each such
 segment (exactly as the learner wrote it) and, for each, provide how to say
@@ -362,15 +388,35 @@ read unnaturally). If the attempt was already entirely in $targetLanguage,
 "completedSentence" is that same sentence (fix obvious typos only, don't
 otherwise rewrite it).
 
-Do NOT echo the native sentence back in the JSON — the app already has it;
+ERRORS - within the $targetLanguage portion only (never for the
+$nativeLanguage segments already covered by "mixedLanguageSegments" above;
+don't report the same thing in both places): if anything in the
+$targetLanguage portion is wrong - grammar, word choice, spelling, spacing,
+or (for languages that use them) tone/diacritic marks - you MUST report it
+as a structured entry in "errors". NEVER give a vague statement like
+"there's a typo" or "grammar is off" with nothing else - every issue you
+mention has to come with exactly what's wrong, what it should be, and why.
+Tone/diacritic mark mistakes are NOT minor: in a tonal language a single
+wrong mark can change the meaning entirely, so call out precisely which
+mark goes where. If there are several separate issues, report each as its
+own "errors" entry. If the $targetLanguage portion has no issues, return an
+empty array - do not invent problems that aren't there.
+
+Each "errors" entry's "shouldBe" must be ONLY the corrected word/phrase for
+that specific issue - never the full corrected sentence. The learner should
+have to recall the rest of the sentence themselves; don't hand them the
+whole answer while pointing out one mistake.
+
+Do NOT echo the native sentence back in the JSON - the app already has it;
 only return the fields below.
 
 Field-by-field language rules (do not mix these up):
-- "feedback": 1-2 sentences on grammar/wording of the $targetLanguage
-  portion, written in $nativeLanguage.
+- "feedback": 1-2 sentences of overall comment on the $targetLanguage
+  portion, written in $nativeLanguage. Point-by-point corrections go in
+  "errors" below, not crammed in here.
 - "referenceTranslation": a natural, correct translation of the native
   sentence, written ENTIRELY in $targetLanguage. This is a model answer for
-  comparison only — it is NOT what gets read/said aloud next (that's
+  comparison only - it is NOT what gets read/said aloud next (that's
   "completedSentence" below).
 - "mixedLanguageSegments[].originalSegment": the $nativeLanguage text
   exactly as the learner wrote it.
@@ -378,22 +424,205 @@ Field-by-field language rules (do not mix these up):
   written ENTIRELY in $targetLanguage.
 - "mixedLanguageSegments[].explanation": nuance or alternative phrasings,
   written in $nativeLanguage.
+- "errors[].userWrote": the exact $targetLanguage word/phrase the learner
+  wrote wrong, quoted verbatim.
+- "errors[].shouldBe": the corrected word/phrase ONLY (not the full
+  sentence), written in $targetLanguage.
+- "errors[].explanation": why, written in $nativeLanguage - for tone/
+  diacritic mistakes, name the specific mark and where it belongs.
 - "completedSentence": the learner's own sentence, ENTIRELY in
   $targetLanguage as described above. This IS the exact sentence the
-  learner will read/say aloud next, so it must be natural and complete —
+  learner will read/say aloud next, so it must be natural and complete -
   never a $nativeLanguage explanation.
 
 Return ONLY raw JSON, no markdown fences:
 {"isCorrect":true|false,
-"feedback":"1-2 sentences in $nativeLanguage on the $targetLanguage portion's grammar/wording",
+"feedback":"1-2 sentences in $nativeLanguage, overall comment only",
 "referenceTranslation":"a natural, correct $targetLanguage translation",
 "mixedLanguageSegments":[{"originalSegment":"...exactly as the learner wrote it","suggestedTranslation":"...in $targetLanguage","explanation":"...in $nativeLanguage"}],
+"errors":[{"userWrote":"...exactly as written, in $targetLanguage","shouldBe":"...corrected word/phrase only, in $targetLanguage","explanation":"...in $nativeLanguage"}],
 "completedSentence":"the learner's sentence, entirely in $targetLanguage"}
 ''';
       final text = await _generateText(apiKey, prompt, label: 'validateTranslation');
       final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
       return TranslationResult.fromJson(decoded);
     });
+  }
+
+  /// Dictionary-style lookup for a single word/short phrase — distinct from
+  /// [validateTranslation], which grades a full-sentence attempt. Detects
+  /// whether [input] was written in [nativeLanguage] or [targetLanguage]
+  /// and explains it from there (translation, meaning, synonyms,
+  /// antonyms). Kept deliberately short-prompted since this is a quick
+  /// word lookup, not a full explanation.
+  ///
+  /// The model intermittently puts the wrong language in "translation"/
+  /// "synonyms"/"antonyms" (same class of instruction-following slip as
+  /// other Gemini calls in this file, just more visible here since a
+  /// single-word answer leaves nowhere for a stray wrong-language token to
+  /// hide). [_hasObviousLanguageMixing] catches the cases it can reliably
+  /// detect and retries ONCE; see that method's doc for what it can't
+  /// catch.
+  Future<WordLookupResult> lookupWord({
+    required String input,
+    required String nativeLanguage,
+    required String targetLanguage,
+  }) async {
+    final apiKey = await _requireApiKey();
+    return _dedupe('lookupWord:$nativeLanguage:$targetLanguage:$input', () async {
+      final prompt = _lookupWordPrompt(
+        input: input,
+        nativeLanguage: nativeLanguage,
+        targetLanguage: targetLanguage,
+      );
+
+      Future<WordLookupResult> attempt() async {
+        final text = await _generateText(apiKey, prompt, label: 'lookupWord');
+        final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
+        return WordLookupResult.fromJson(decoded);
+      }
+
+      final first = await attempt();
+      if (!_hasObviousLanguageMixing(first, nativeLanguage, targetLanguage)) {
+        return first;
+      }
+
+      _log('lookupWord: detected likely language mixing, retrying once');
+      final retry = await attempt();
+      if (!_hasObviousLanguageMixing(retry, nativeLanguage, targetLanguage)) {
+        return retry;
+      }
+
+      _log('lookupWord: retry still shows language mixing, giving up');
+      throw GeminiApiException(
+        GeminiFailureReason.other,
+        'Please try again.',
+      );
+    });
+  }
+
+  String _lookupWordPrompt({
+    required String input,
+    required String nativeLanguage,
+    required String targetLanguage,
+  }) {
+    return '''
+Dictionary lookup for a learner studying $targetLanguage (native language:
+$nativeLanguage). Input: "$input"
+
+First determine whether this input is written in $nativeLanguage or
+$targetLanguage. Keep the response short and to the point - this is a
+single word/short phrase lookup, not a full explanation.
+
+Field-by-field language rules (do not mix these up - getting the language
+wrong on any single field is the most common mistake here, so follow this
+exactly for every field below, not just once at the top):
+- "detectedLanguage": exactly "native" or "target".
+- "translation": the input's equivalent in the OTHER language (if the
+  input was $nativeLanguage, give the $targetLanguage equivalent; if it
+  was $targetLanguage, give the $nativeLanguage equivalent). MUST be
+  written ENTIRELY in that other language - not one word of the input's
+  own language.
+- "meaning": a brief explanation of the meaning/nuance. MUST be written
+  ENTIRELY in $nativeLanguage, no matter which language the input was.
+- "synonyms": similar words/phrases in the SAME language as the input.
+  MUST be written in the input's own language: if the input was
+  $targetLanguage, each entry is the $targetLanguage word quoted followed
+  by its $nativeLanguage gloss in parentheses (e.g. "간다(khong đi)"); if
+  the input was $nativeLanguage, each entry MUST be ENTIRELY in
+  $nativeLanguage, with no $targetLanguage text anywhere in it.
+- "antonyms": same language/formatting rule as "synonyms" above. Empty
+  array if none apply.
+
+Example of the exact JSON shape and field-language pattern to follow (this
+illustrates the pattern using English/Spanish only - your real answer must
+use $nativeLanguage/$targetLanguage instead, never English/Spanish unless
+one of those happens to be the actual language). Input "run", native
+English, learner studying Spanish:
+{"detectedLanguage":"native",
+"translation":"correr",
+"meaning":"To move quickly on foot.",
+"synonyms":["sprint","jog","dash"],
+"antonyms":["walk","stroll"]}
+Note "translation" switched entirely to the OTHER language (Spanish),
+while "synonyms"/"antonyms" stayed entirely in the SAME language as the
+input (English, since "run" was English) - not Spanish.
+
+Return ONLY raw JSON, no markdown fences:
+{"detectedLanguage":"native|target",
+"translation":"...entirely in the OTHER language from the input",
+"meaning":"...entirely in $nativeLanguage",
+"synonyms":["...entirely in the input's own language, per the rule above"],
+"antonyms":["...entirely in the input's own language, per the rule above"]}
+''';
+  }
+
+  /// Best-effort check for "translation"/"synonyms"/"antonyms" coming back
+  /// in the wrong language. Only reliable when the expected language uses a
+  /// distinct Unicode script from the other language (e.g. Korean vs.
+  /// English, Japanese vs. English) - checked via [_scriptPatternFor]. For
+  /// same-script pairs (e.g. English vs. Vietnamese, both Latin-based)
+  /// there's no cheap way to tell "wrong language" from "right language"
+  /// apart by character inspection alone, so this deliberately returns
+  /// false rather than guess - the strengthened prompt above is the actual
+  /// fix for that case, this is just a safety net for the cases it CAN
+  /// reliably catch.
+  bool _hasObviousLanguageMixing(
+    WordLookupResult result,
+    String nativeLanguage,
+    String targetLanguage,
+  ) {
+    final isNativeInput = result.detectedLanguage == 'native';
+    final translationExpected = isNativeInput ? targetLanguage : nativeLanguage;
+    final sameLanguageExpected = isNativeInput ? nativeLanguage : targetLanguage;
+
+    if (_isDefinitelyWrongLanguage(result.translation, translationExpected)) {
+      return true;
+    }
+    if (result.synonyms.isNotEmpty &&
+        _isDefinitelyWrongLanguage(result.synonyms.join(' '), sameLanguageExpected)) {
+      return true;
+    }
+    if (result.antonyms.isNotEmpty &&
+        _isDefinitelyWrongLanguage(result.antonyms.join(' '), sameLanguageExpected)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// True only when [expectedLanguage] maps to a distinct Unicode script
+  /// (see [_scriptPatternFor]) and [text] contains not a single character
+  /// of it - i.e. the field is entirely in some other script, which can
+  /// only mean the wrong language was used. Returns false (not "wrong") for
+  /// undetectable language pairs rather than risk a false-positive retry.
+  bool _isDefinitelyWrongLanguage(String text, String expectedLanguage) {
+    if (text.trim().isEmpty) return false;
+    final pattern = _scriptPatternFor(expectedLanguage);
+    if (pattern == null) return false;
+    return !pattern.hasMatch(text);
+  }
+
+  /// Maps a handful of common non-Latin-script languages to a regex
+  /// matching their Unicode block, keyed by a loose substring match on the
+  /// language name (as freely typed by the user during onboarding, e.g.
+  /// "Korean", "korean", "North Korean"). Returns null for anything else
+  /// (Latin-script languages like English/Vietnamese/French, or any
+  /// language name not recognized) - those pairs aren't distinguishable by
+  /// script alone, so callers must treat null as "can't tell".
+  RegExp? _scriptPatternFor(String languageName) {
+    final lower = languageName.toLowerCase();
+    if (lower.contains('korean')) return RegExp(r'[가-힣ᄀ-ᇿ㄰-㆏]');
+    if (lower.contains('japanese')) {
+      return RegExp(r'[぀-ゟ゠-ヿ一-鿿]');
+    }
+    if (lower.contains('chinese') || lower.contains('mandarin') || lower.contains('cantonese')) {
+      return RegExp(r'[一-鿿]');
+    }
+    if (lower.contains('russian')) return RegExp(r'[Ѐ-ӿ]');
+    if (lower.contains('arabic')) return RegExp(r'[؀-ۿ]');
+    if (lower.contains('thai')) return RegExp(r'[฀-๿]');
+    if (lower.contains('hindi')) return RegExp(r'[ऀ-ॿ]');
+    return null;
   }
 
   /// Sends a recorded pronunciation attempt to Gemini for multimodal
@@ -415,7 +644,7 @@ closely it matches the target sentence.
 
 Field-by-field language rules (do not mix these up):
 - "recognizedText": transcribe exactly what you heard, written in
-  $targetLanguage — the language they were speaking. Do NOT translate it
+  $targetLanguage - the language they were speaking. Do NOT translate it
   into $nativeLanguage; the learner needs to see what their pronunciation
   actually sounded like, in the language they were practicing.
 - "feedback": your assessment/notes, written in $nativeLanguage (the

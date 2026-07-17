@@ -141,6 +141,7 @@ class _WritingScreenState extends ConsumerState<WritingScreen> {
                 FeedbackBox(
                   feedback: state.translationResult!.feedback,
                   isCorrect: state.translationResult!.isCorrect,
+                  errors: state.translationResult!.errors,
                 ),
                 if (state.translationResult!.mixedLanguageSegments.isNotEmpty) ...[
                   const SizedBox(height: 16),

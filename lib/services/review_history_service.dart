@@ -1,19 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/review_record.dart';
+import 'storage_location_service.dart';
 
 /// Reads/writes `review_history.json` — every sentence the learner has
-/// completed a turn on, for spaced review. Deliberately separate from
+/// completed a turn on, for spaced review — under the app's storage
+/// directory (see `StorageLocationService`). Deliberately separate from
 /// `TtsCacheService`: the cache exists purely for playback and can evict
 /// entries at any time, while this is the durable learning record
 /// (`firstLearnedAt`/`lastReviewedAt`/`reviewCount`) that review selection
 /// is based on.
 class ReviewHistoryService {
+  ReviewHistoryService({StorageLocationService? storageLocationService})
+      : _storageLocationService = storageLocationService ?? StorageLocationService();
+
+  final StorageLocationService _storageLocationService;
+
   Future<File> _historyFile() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/review_history.json');
   }
 

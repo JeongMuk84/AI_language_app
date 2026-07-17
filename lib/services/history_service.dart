@@ -1,23 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/conversation_turn.dart';
 import '../models/exercise_type.dart';
 import '../models/history_summary.dart';
 import 'session_state_service.dart';
+import 'storage_location_service.dart';
 
 /// Reads/writes per-day history files (`history/history_<yyyy-MM-dd>.json`)
-/// summarizing finalized learning sessions.
+/// summarizing finalized learning sessions, under the app's storage
+/// directory (see `StorageLocationService`).
 class HistoryService {
-  HistoryService({SessionStateService? sessionStateService})
-      : _sessionStateService = sessionStateService ?? SessionStateService();
+  HistoryService({SessionStateService? sessionStateService, StorageLocationService? storageLocationService})
+      : _sessionStateService = sessionStateService ?? SessionStateService(),
+        _storageLocationService = storageLocationService ?? StorageLocationService();
 
   final SessionStateService _sessionStateService;
+  final StorageLocationService _storageLocationService;
 
   Future<Directory> _historyDir() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     final historyDir = Directory('${dir.path}/history');
     if (!await historyDir.exists()) {
       await historyDir.create(recursive: true);

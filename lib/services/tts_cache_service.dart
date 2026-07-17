@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:path_provider/path_provider.dart';
+import 'storage_location_service.dart';
 
 /// A cached TTS clip, plus the voice it was originally synthesized with.
 class TtsCacheHit {
@@ -17,6 +17,13 @@ class TtsCacheHit {
 class TtsCacheLocation {
   const TtsCacheLocation({required this.path, required this.voice});
 
+  /// The cached `.wav` file's name WITHIN the `tts_cache/` directory —
+  /// deliberately just a bare filename, not an absolute path, so it stays
+  /// valid regardless of where `StorageLocationService.baseDirectory()`
+  /// resolves to on a given machine/run. Resolve against
+  /// `StorageLocationService` + `'tts_cache'` if a real file path is ever
+  /// needed; currently nothing reads this for actual playback (see
+  /// `ReviewScreen`, which re-resolves via `TtsCacheService.get` instead).
   final String path;
   final String voice;
 }
@@ -28,13 +35,19 @@ class TtsCacheLocation {
 ///
 /// Cache metadata (which sentence maps to which audio file, when it was
 /// last used, and which voice it was synthesized with) lives in a single
-/// `manifest.json` alongside the cached `.wav` files. Capped at
+/// `manifest.json` alongside the cached `.wav` files, under the app's
+/// storage directory (see `StorageLocationService`). Capped at
 /// [_maxEntries] entries, evicted least-recently-used first.
 class TtsCacheService {
+  TtsCacheService({StorageLocationService? storageLocationService})
+      : _storageLocationService = storageLocationService ?? StorageLocationService();
+
+  final StorageLocationService _storageLocationService;
+
   static const _maxEntries = 100;
 
   Future<Directory> _cacheDir() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     final cacheDir = Directory('${dir.path}/tts_cache');
     if (!await cacheDir.exists()) {
       await cacheDir.create(recursive: true);
@@ -108,7 +121,7 @@ class TtsCacheService {
     final dir = await _cacheDir();
     final file = File('${dir.path}/$fileName');
     if (!await file.exists()) return null;
-    return TtsCacheLocation(path: file.path, voice: voice);
+    return TtsCacheLocation(path: fileName, voice: voice);
   }
 
   /// Stores newly-synthesized audio for (sentence, language), evicting the

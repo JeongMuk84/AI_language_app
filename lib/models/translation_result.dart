@@ -1,4 +1,5 @@
 import 'mixed_language_segment.dart';
+import 'validation_error.dart';
 
 /// Result of grading a writing (translation) attempt. Graded by meaning,
 /// not exact wording — [referenceTranslation] is a model answer used for
@@ -12,11 +13,15 @@ class TranslationResult {
     required this.referenceTranslation,
     required this.completedSentence,
     required this.mixedLanguageSegments,
+    required this.errors,
   });
 
   factory TranslationResult.fromJson(Map<String, dynamic> json) {
     final segments = (json['mixedLanguageSegments'] as List? ?? const [])
         .map((e) => MixedLanguageSegment.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final errors = (json['errors'] as List? ?? const [])
+        .map((e) => ValidationError.fromJson(e as Map<String, dynamic>))
         .toList();
     return TranslationResult(
       isCorrect: json['isCorrect'] as bool? ?? false,
@@ -24,13 +29,14 @@ class TranslationResult {
       referenceTranslation: json['referenceTranslation'] as String? ?? '',
       completedSentence: json['completedSentence'] as String? ?? '',
       mixedLanguageSegments: segments,
+      errors: errors,
     );
   }
 
   final bool isCorrect;
 
-  /// Native-language explanation of grammar/wording issues in the
-  /// target-language portion of the attempt.
+  /// Native-language overall comment on the target-language portion —
+  /// point-by-point corrections live in [errors], not crammed in here.
   final String feedback;
 
   /// A model translation of the native sentence, written ENTIRELY in the
@@ -50,11 +56,18 @@ class TranslationResult {
   /// the target language.
   final List<MixedLanguageSegment> mixedLanguageSegments;
 
+  /// Specific, actionable corrections within the target-language portion
+  /// (grammar/word-choice/spelling/tone-mark mistakes) — empty if there
+  /// weren't any. Never duplicates what's already covered by
+  /// [mixedLanguageSegments].
+  final List<ValidationError> errors;
+
   Map<String, dynamic> toJson() => {
         'isCorrect': isCorrect,
         'feedback': feedback,
         'referenceTranslation': referenceTranslation,
         'completedSentence': completedSentence,
         'mixedLanguageSegments': mixedLanguageSegments.map((e) => e.toJson()).toList(),
+        'errors': errors.map((e) => e.toJson()).toList(),
       };
 }

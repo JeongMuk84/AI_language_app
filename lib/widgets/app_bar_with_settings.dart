@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'dictionary_icon_button.dart';
 import 'settings_icon_button.dart';
 
 /// Builds the standard AppBar shape used by every screen after
-/// ApiKeyScreen: a title plus the shared [SettingsIconButton] action. Use
-/// this instead of hand-rolling `AppBar(actions: [SettingsIconButton()])`
-/// so all of them stay visually identical.
+/// ApiKeyScreen: a title plus the shared [DictionaryIconButton] and
+/// [SettingsIconButton] actions. Use this instead of hand-rolling
+/// `AppBar(actions: [DictionaryIconButton(), SettingsIconButton()])` so all
+/// of them stay visually identical and in sync.
 ///
 /// [progressLabel], when given (e.g. "Today: 3/10"), is shown as a single
 /// plain `Text` action to the title's left — not folded into a multi-line
@@ -25,6 +27,7 @@ AppBar buildAppBarWithSettings(BuildContext context, String title, {String? prog
             child: Text(progressLabel, style: Theme.of(context).textTheme.labelMedium),
           ),
         ),
+      const DictionaryIconButton(),
       const SettingsIconButton(),
     ],
   );

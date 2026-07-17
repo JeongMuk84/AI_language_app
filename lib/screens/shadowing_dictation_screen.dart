@@ -157,6 +157,7 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
                 FeedbackBox(
                   feedback: state.dictationResult!.feedback,
                   isCorrect: state.dictationResult!.isCorrect,
+                  errors: state.dictationResult!.errors,
                 ),
                 const SizedBox(height: 16),
                 SentenceAnalysisBox(

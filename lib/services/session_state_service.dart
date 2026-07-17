@@ -1,30 +1,35 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../models/conversation_turn.dart';
 import '../models/exercise_type.dart';
 import '../models/learning_sub_step.dart';
 import '../models/review_progress.dart';
 import '../models/session_state.dart';
+import 'storage_location_service.dart';
 
 /// Reads/writes the in-progress learning session to `session_state.json` in
-/// the app documents directory, so it survives an app restart. Cleared on
-/// "학습 종료" or a detected midnight rollover (see `HistoryService.finalizeSession`).
+/// the app's storage directory (see `StorageLocationService`), so it
+/// survives an app restart. Cleared on "학습 종료" or a detected midnight
+/// rollover (see `HistoryService.finalizeSession`).
 class SessionStateService {
+  SessionStateService({StorageLocationService? storageLocationService})
+      : _storageLocationService = storageLocationService ?? StorageLocationService();
+
+  final StorageLocationService _storageLocationService;
+
   Future<File> _stateFile() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/session_state.json');
   }
 
   Future<File> _dailyProgressFile() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/daily_progress.json');
   }
 
   Future<File> _reviewProgressFile() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/review_progress.json');
   }
 

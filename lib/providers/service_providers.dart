@@ -8,14 +8,22 @@ import '../services/history_service.dart';
 import '../services/review_history_service.dart';
 import '../services/review_session_service.dart';
 import '../services/session_state_service.dart';
+import '../services/storage_location_service.dart';
 import '../services/tts_cache_service.dart';
 
-final configServiceProvider = Provider<ConfigService>((ref) => ConfigService());
+final storageLocationServiceProvider =
+    Provider<StorageLocationService>((ref) => StorageLocationService());
+
+final configServiceProvider = Provider<ConfigService>((ref) {
+  return ConfigService(storageLocationService: ref.read(storageLocationServiceProvider));
+});
 
 final apiKeyStorageServiceProvider =
     Provider<ApiKeyStorageService>((ref) => ApiKeyStorageService());
 
-final ttsCacheServiceProvider = Provider<TtsCacheService>((ref) => TtsCacheService());
+final ttsCacheServiceProvider = Provider<TtsCacheService>((ref) {
+  return TtsCacheService(storageLocationService: ref.read(storageLocationServiceProvider));
+});
 
 final geminiServiceProvider = Provider<GeminiService>((ref) {
   return GeminiService(
@@ -25,17 +33,24 @@ final geminiServiceProvider = Provider<GeminiService>((ref) {
   );
 });
 
-final handoffServiceProvider = Provider<HandoffService>((ref) => HandoffService());
-
-final sessionStateServiceProvider =
-    Provider<SessionStateService>((ref) => SessionStateService());
-
-final historyServiceProvider = Provider<HistoryService>((ref) {
-  return HistoryService(sessionStateService: ref.read(sessionStateServiceProvider));
+final handoffServiceProvider = Provider<HandoffService>((ref) {
+  return HandoffService(storageLocationService: ref.read(storageLocationServiceProvider));
 });
 
-final reviewHistoryServiceProvider =
-    Provider<ReviewHistoryService>((ref) => ReviewHistoryService());
+final sessionStateServiceProvider = Provider<SessionStateService>((ref) {
+  return SessionStateService(storageLocationService: ref.read(storageLocationServiceProvider));
+});
+
+final historyServiceProvider = Provider<HistoryService>((ref) {
+  return HistoryService(
+    sessionStateService: ref.read(sessionStateServiceProvider),
+    storageLocationService: ref.read(storageLocationServiceProvider),
+  );
+});
+
+final reviewHistoryServiceProvider = Provider<ReviewHistoryService>((ref) {
+  return ReviewHistoryService(storageLocationService: ref.read(storageLocationServiceProvider));
+});
 
 final reviewSessionServiceProvider = Provider<ReviewSessionService>((ref) {
   return ReviewSessionService(

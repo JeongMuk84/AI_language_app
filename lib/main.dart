@@ -8,6 +8,7 @@ import 'services/handoff_service.dart';
 import 'services/history_service.dart';
 import 'services/review_history_service.dart';
 import 'services/session_state_service.dart';
+import 'services/storage_location_service.dart';
 import 'services/tts_cache_service.dart';
 import 'theme/app_theme.dart';
 import 'viewmodels/theme_mode_view_model.dart';
@@ -38,10 +39,18 @@ const _resetHistory = bool.fromEnvironment('RESET_HISTORY');
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final configService = ConfigService();
-  debugPrint('[ai_language_app] config.json path: ${await configService.configFilePath()}');
+  final storageLocationService = StorageLocationService();
+  final baseDir = await storageLocationService.baseDirectory();
+  debugPrint('[La Fly] Storage directory: ${baseDir.path}');
+  await storageLocationService.migrateLegacyDataIfNeeded();
 
-  await applyResetFlags(configService: configService);
+  final configService = ConfigService(storageLocationService: storageLocationService);
+  debugPrint('[La Fly] config.json path: ${await configService.configFilePath()}');
+
+  await applyResetFlags(
+    configService: configService,
+    storageLocationService: storageLocationService,
+  );
 
   runApp(
     const RestartWidget(
@@ -55,7 +64,10 @@ Future<void> main() async {
 /// service's own `clear*` method — the same ones Settings' "Reset All
 /// Data" button uses — so this is just flag-reading glue, not a second
 /// copy of the reset logic.
-Future<void> applyResetFlags({required ConfigService configService}) async {
+Future<void> applyResetFlags({
+  required ConfigService configService,
+  required StorageLocationService storageLocationService,
+}) async {
   final targets = <String, bool>{
     'API Key': _resetApp || _resetKey,
     'config.json': _resetApp,
@@ -78,24 +90,24 @@ Future<void> applyResetFlags({required ConfigService configService}) async {
   if (targets['config.json']!) {
     await configService.clearConfig();
   }
-  final sessionStateService = SessionStateService();
+  final sessionStateService = SessionStateService(storageLocationService: storageLocationService);
   if (targets['session state']!) {
     await sessionStateService.clearSession();
   }
   if (targets['history']!) {
-    await HistoryService().clearHistory();
+    await HistoryService(storageLocationService: storageLocationService).clearHistory();
   }
   if (targets['handoff files']!) {
-    await HandoffService().clearHandoffFiles();
+    await HandoffService(storageLocationService: storageLocationService).clearHandoffFiles();
   }
   if (targets['daily progress']!) {
     await sessionStateService.clearDailyProgress();
   }
   if (targets['TTS cache']!) {
-    await TtsCacheService().clearCache();
+    await TtsCacheService(storageLocationService: storageLocationService).clearCache();
   }
   if (targets['review history']!) {
-    await ReviewHistoryService().clearHistory();
+    await ReviewHistoryService(storageLocationService: storageLocationService).clearHistory();
   }
   if (targets['review progress']!) {
     await sessionStateService.clearReviewProgress();

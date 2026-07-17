@@ -22,6 +22,7 @@ class ReviewState {
     this.isSubmittingTranslation = false,
     this.translationResult,
     this.translationError,
+    this.translationWarning,
     this.lastUserTranslation,
     this.isAnalyzingPronunciation = false,
     this.pronunciationResult,
@@ -37,6 +38,14 @@ class ReviewState {
   final bool isSubmittingTranslation;
   final TranslationResult? translationResult;
   final String? translationError;
+
+  /// Client-side-only guard message (e.g. "write a complete sentence")
+  /// shown when Submit was tapped with an empty/whitespace-only textbox —
+  /// deliberately never sends that to `validateTranslation`, so it costs
+  /// no API call. Distinct from [translationResult]: this never represents
+  /// an actual graded attempt, so it doesn't affect [isTranslationCorrect]
+  /// or get persisted into review progress.
+  final String? translationWarning;
   final String? lastUserTranslation;
 
   final bool isAnalyzingPronunciation;
@@ -51,17 +60,19 @@ class ReviewState {
   /// blank per-item view.
   bool get isExhausted => items.isNotEmpty && currentIndex >= items.length;
 
-  bool get hasSubmittedTranslation => translationResult != null;
+  /// True only once a *correctly*-graded translation has been submitted —
+  /// not just "submitted at least once". Drives both the textbox/Submit
+  /// button lock (ReviewScreen) and [canAdvance] below.
+  bool get isTranslationCorrect => translationResult?.isCorrect ?? false;
 
   bool get isLastItem => items.isNotEmpty && currentIndex == items.length - 1;
 
   /// "Next Sentence" / "Finish Review & Start Learning" unlocks only once
-  /// both the translation is submitted *and* pronunciation has passed —
-  /// listening/recording themselves are separately gated on
-  /// [hasSubmittedTranslation] (see ReviewScreen), so this can't be
-  /// reached by recording before submitting.
+  /// the translation has been graded *correct* and pronunciation has
+  /// passed — a wrong translation can't be advanced past, however good the
+  /// pronunciation attempt was.
   bool get canAdvance =>
-      hasSubmittedTranslation &&
+      isTranslationCorrect &&
       pronunciationResult != null &&
       pronunciationResult!.accuracyPercent >= kPronunciationPassThreshold;
 
@@ -76,6 +87,8 @@ class ReviewState {
     bool clearTranslationResult = false,
     String? translationError,
     bool clearTranslationError = false,
+    String? translationWarning,
+    bool clearTranslationWarning = false,
     String? lastUserTranslation,
     bool? isAnalyzingPronunciation,
     PronunciationResult? pronunciationResult,
@@ -96,6 +109,9 @@ class ReviewState {
       translationError: clearTranslationError
           ? null
           : (translationError ?? this.translationError),
+      translationWarning: clearTranslationWarning
+          ? null
+          : (translationWarning ?? this.translationWarning),
       lastUserTranslation: lastUserTranslation ?? this.lastUserTranslation,
       isAnalyzingPronunciation: isAnalyzingPronunciation ?? this.isAnalyzingPronunciation,
       pronunciationResult: clearPronunciationResult
@@ -197,15 +213,33 @@ class ReviewViewModel extends Notifier<ReviewState> {
   Future<void> submitTranslation(String userTranslation) async {
     final item = state.currentItem;
     if (item == null) return;
-    state = state.copyWith(isSubmittingTranslation: true, clearTranslationError: true);
+
+    final trimmed = userTranslation.trim();
+    if (trimmed.isEmpty) {
+      // Never spends a validateTranslation call on nothing — this is a
+      // pure client-side guard, not a graded attempt, so it doesn't touch
+      // translationResult (Submit/the textbox stay unlocked either way
+      // since isTranslationCorrect only looks at translationResult).
+      state = state.copyWith(
+        clearTranslationError: true,
+        translationWarning: 'Please write a complete sentence.',
+      );
+      return;
+    }
+
+    state = state.copyWith(
+      isSubmittingTranslation: true,
+      clearTranslationError: true,
+      clearTranslationWarning: true,
+    );
     try {
       final result = await ref
           .read(geminiServiceProvider)
-          .validateTranslation(nativeSentence: item.sentenceInNative, userTranslation: userTranslation);
+          .validateTranslation(nativeSentence: item.sentenceInNative, userTranslation: trimmed);
       state = state.copyWith(
         isSubmittingTranslation: false,
         translationResult: result,
-        lastUserTranslation: userTranslation,
+        lastUserTranslation: trimmed,
       );
       await _persistCurrentItemSnapshot();
     } catch (e) {
@@ -213,9 +247,14 @@ class ReviewViewModel extends Notifier<ReviewState> {
     }
   }
 
+  /// Pronunciation is graded against the item's fixed, canonical
+  /// [ReviewItem.sentenceInTarget], not whatever the learner is currently
+  /// attempting to translate — so unlike the old (now-removed) gate here,
+  /// this doesn't require a translation to already be submitted, matching
+  /// Play/Record being available from screen entry (see ReviewScreen).
   Future<void> analyzePronunciation(Uint8List audioBytes) async {
     final item = state.currentItem;
-    if (item == null || !state.hasSubmittedTranslation) return;
+    if (item == null) return;
     state = state.copyWith(isAnalyzingPronunciation: true, clearPronunciationError: true);
     try {
       final result = await ref

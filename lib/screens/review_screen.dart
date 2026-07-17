@@ -119,7 +119,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     // Once the learner has actually gotten the translation right, there's
     // no reason to let them edit/resubmit it — a wrong (or not-yet-
     // attempted) translation keeps both editable so they can correct it.
-    final isTranslationCorrect = state.translationResult?.isCorrect ?? false;
+    final isTranslationCorrect = state.isTranslationCorrect;
     final result = state.pronunciationResult;
     final passed = result != null && result.accuracyPercent >= kPronunciationPassThreshold;
 
@@ -143,57 +143,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                    const SizedBox(height: 24),
-                    TextField(
-                      controller: _controller,
-                      enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
-                      minLines: 1,
-                      maxLines: 3,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        hintText: 'Write the translation',
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: (state.isSubmittingTranslation || isTranslationCorrect)
-                          ? null
-                          : _submit,
-                      child: state.isSubmittingTranslation
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Submit'),
-                    ),
-                    if (state.translationError != null) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        state.translationError!,
-                        style: TextStyle(color: Theme.of(context).colorScheme.error),
-                      ),
-                    ],
-                    if (state.translationResult != null) ...[
-                      const SizedBox(height: 16),
-                      // The original sentence, not a freshly-generated
-                      // reference translation — this is exactly what gets
-                      // played back and graded below, so it must match.
-                      Text(
-                        item.sentenceInTarget,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 12),
-                      FeedbackBox(
-                        feedback: state.translationResult!.feedback,
-                        isCorrect: state.translationResult!.isCorrect,
-                      ),
-                    ],
-                    const SizedBox(height: 24),
-                    const Divider(),
                     const SizedBox(height: 24),
                     Center(
                       child: AudioPlayButton(
@@ -222,6 +171,55 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                         tooltip: 'Play sentence',
                       ),
                     ),
+                    const SizedBox(height: 24),
+                    TextField(
+                      controller: _controller,
+                      enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
+                      minLines: 1,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        hintText: 'Write the translation',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: (state.isSubmittingTranslation || isTranslationCorrect)
+                          ? null
+                          : _submit,
+                      child: state.isSubmittingTranslation
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Submit'),
+                    ),
+                    if (state.translationWarning != null) ...[
+                      const SizedBox(height: 16),
+                      FeedbackBox(feedback: state.translationWarning!),
+                    ],
+                    if (state.translationError != null) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        state.translationError!,
+                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      ),
+                    ],
+                    if (state.translationResult != null) ...[
+                      const SizedBox(height: 16),
+                      // Grading feedback only — deliberately never shows
+                      // the correct/model sentence itself (that used to be
+                      // `item.sentenceInTarget` here); the learner has to
+                      // recall it themselves.
+                      FeedbackBox(
+                        feedback: state.translationResult!.feedback,
+                        isCorrect: state.translationResult!.isCorrect,
+                        errors: state.translationResult!.errors,
+                      ),
+                    ],
+                    const SizedBox(height: 24),
+                    const Divider(),
                     const SizedBox(height: 24),
                     Center(
                       child: AudioRecorderWidget(
