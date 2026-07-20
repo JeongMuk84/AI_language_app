@@ -4,14 +4,18 @@ import 'validation_error.dart';
 /// Result of grading a writing (translation) attempt. Graded by meaning,
 /// not exact wording — [referenceTranslation] is a model answer used for
 /// comparison, not the sentence the learner actually produced.
-/// [completedSentence] is what actually gets read/said aloud next (see its
-/// doc comment below).
+///
+/// There is deliberately no "completed sentence" here: a mixed-language
+/// attempt is never auto-completed into a target-language sentence on the
+/// learner's behalf. [mixedLanguageSegments] only explains how to say each
+/// native-language part — the learner has to edit their own attempt and
+/// resubmit an entirely target-language sentence themselves before the
+/// turn can be considered done (see [hasNativeLanguageMixed]).
 class TranslationResult {
   const TranslationResult({
     required this.isCorrect,
     required this.feedback,
     required this.referenceTranslation,
-    required this.completedSentence,
     required this.mixedLanguageSegments,
     required this.errors,
   });
@@ -27,12 +31,17 @@ class TranslationResult {
       isCorrect: json['isCorrect'] as bool? ?? false,
       feedback: json['feedback'] as String? ?? '',
       referenceTranslation: json['referenceTranslation'] as String? ?? '',
-      completedSentence: json['completedSentence'] as String? ?? '',
       mixedLanguageSegments: segments,
       errors: errors,
     );
   }
 
+  /// Whether the TARGET-LANGUAGE portion of the attempt is grammatically/
+  /// lexically correct — independent of [hasNativeLanguageMixed]. A
+  /// grammatically perfect attempt that still mixes in native-language
+  /// words is `isCorrect: true` here (the part that IS in the target
+  /// language is fine) but still isn't a completed turn; see
+  /// [hasNativeLanguageMixed].
   final bool isCorrect;
 
   /// Native-language overall comment on the target-language portion —
@@ -43,17 +52,10 @@ class TranslationResult {
   /// target language — shown for comparison only.
   final String referenceTranslation;
 
-  /// The learner's own attempt, rewritten entirely in the target language
-  /// (any native-language segments replaced by their target-language
-  /// equivalent). This — not [referenceTranslation] — is the sentence that
-  /// gets displayed/read aloud/graded on the following listening &
-  /// pronunciation screen, since it's the sentence the learner actually
-  /// produced (augmented, not replaced by a model example).
-  final String completedSentence;
-
   /// Native-language segments the learner fell back to instead of writing
   /// in the target language — empty if the attempt was already entirely in
-  /// the target language.
+  /// the target language. Each entry explains how to say that part in the
+  /// target language, for the learner to apply themselves.
   final List<MixedLanguageSegment> mixedLanguageSegments;
 
   /// Specific, actionable corrections within the target-language portion
@@ -62,11 +64,17 @@ class TranslationResult {
   /// [mixedLanguageSegments].
   final List<ValidationError> errors;
 
+  /// True if any part of the attempt was left in the native language.
+  /// Derived locally from [mixedLanguageSegments] rather than trusting a
+  /// separately-model-authored boolean, so it can never disagree with the
+  /// segments actually returned. A turn only counts as complete when this
+  /// is false AND [isCorrect] is true — see `WritingState.canProceedToListening`.
+  bool get hasNativeLanguageMixed => mixedLanguageSegments.isNotEmpty;
+
   Map<String, dynamic> toJson() => {
         'isCorrect': isCorrect,
         'feedback': feedback,
         'referenceTranslation': referenceTranslation,
-        'completedSentence': completedSentence,
         'mixedLanguageSegments': mixedLanguageSegments.map((e) => e.toJson()).toList(),
         'errors': errors.map((e) => e.toJson()).toList(),
       };

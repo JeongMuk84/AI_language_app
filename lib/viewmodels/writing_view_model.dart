@@ -22,7 +22,6 @@ class WritingState {
     this.translationResult,
     this.translationError,
     this.lastUserTranslation,
-    this.completedSentence,
     this.sentenceHidden = false,
     this.isAnalyzingPronunciation = false,
     this.pronunciationResult,
@@ -40,25 +39,31 @@ class WritingState {
 
   /// The learner's own final submitted translation, exactly as typed
   /// (whatever they last submitted, if they retried) — stored for history
-  /// purposes (`ConversationTurn.userAnswer`). NOT what gets
-  /// spoken/displayed/practiced on WritingListeningScreen when the
-  /// submission mixed in native-language segments; see [completedSentence]
-  /// for that.
+  /// purposes (`ConversationTurn.userAnswer`/`sentenceInTarget`). Once
+  /// [canProceedToListening] is true, this is guaranteed to be entirely in
+  /// the target language (no native-language segments left) — it's also
+  /// the exact sentence WritingListeningScreen displays, plays via TTS, and
+  /// grades pronunciation against. There is deliberately no separate
+  /// "completed"/auto-translated variant: a mixed-language submission is
+  /// never auto-finished on the learner's behalf, they have to edit their
+  /// own attempt and resubmit an entirely target-language sentence
+  /// themselves (see `TranslationResult.hasNativeLanguageMixed`).
   final String? lastUserTranslation;
-
-  /// [lastUserTranslation] with any native-language segments replaced by
-  /// their target-language equivalent (`TranslationResult.completedSentence`)
-  /// — this is the sentence WritingListeningScreen displays, plays via TTS,
-  /// and grades pronunciation against. Equal to [lastUserTranslation] when
-  /// the submission was already entirely in the target language.
-  final String? completedSentence;
 
   final bool sentenceHidden;
   final bool isAnalyzingPronunciation;
   final PronunciationResult? pronunciationResult;
   final String? pronunciationError;
 
-  bool get canProceedToListening => translationResult != null;
+  /// A submission only counts as done when the target-language portion is
+  /// correct AND nothing was left in the native language — a
+  /// grammatically-fine attempt that still mixes languages is not enough;
+  /// the learner has to fully rewrite it in the target language themselves
+  /// (see `TranslationResult.hasNativeLanguageMixed`).
+  bool get canProceedToListening =>
+      translationResult != null &&
+      translationResult!.isCorrect &&
+      !translationResult!.hasNativeLanguageMixed;
 
   WritingState copyWith({
     bool? isSubmittingTranslation,
@@ -67,7 +72,6 @@ class WritingState {
     String? translationError,
     bool clearTranslationError = false,
     String? lastUserTranslation,
-    String? completedSentence,
     bool? sentenceHidden,
     bool? isAnalyzingPronunciation,
     PronunciationResult? pronunciationResult,
@@ -88,7 +92,6 @@ class WritingState {
           ? null
           : (translationError ?? this.translationError),
       lastUserTranslation: lastUserTranslation ?? this.lastUserTranslation,
-      completedSentence: completedSentence ?? this.completedSentence,
       sentenceHidden: sentenceHidden ?? this.sentenceHidden,
       isAnalyzingPronunciation: isAnalyzingPronunciation ?? this.isAnalyzingPronunciation,
       pronunciationResult: clearPronunciationResult
@@ -108,7 +111,18 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
   @override
   WritingState build() => const WritingState();
 
+  /// Guards against two overlapping [loadSentence] calls both racing past
+  /// the "does the persisted session already have a sentence" check before
+  /// either has written its result — see the identical guard (and its full
+  /// rationale) on `ShadowingViewModel.loadSentence`.
+  bool _isLoadingSentence = false;
+
+  /// [nativeSentence] ends up as the single reference for this whole turn
+  /// once this returns — `submitTranslation`'s grading call reads it
+  /// directly.
   Future<void> loadSentence() async {
+    if (_isLoadingSentence) return;
+    _isLoadingSentence = true;
     state = const WritingState();
     try {
       final sessionService = ref.read(sessionStateServiceProvider);
@@ -123,10 +137,8 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
         sentence = session.currentSentence!;
         turnId = session.currentTurnId!;
       } else {
-        sentence = await gemini.generateNextSentence(
-          direction: 'native',
-          history: session.conversationHistory,
-        );
+        final history = await ref.read(conversationHistoryServiceProvider).readAll();
+        sentence = await gemini.generateNextSentence(direction: 'native', history: history);
         turnId = newTurnId();
         await sessionService.setCurrentSentence(session, sentence: sentence, turnId: turnId);
       }
@@ -134,6 +146,8 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
       state = WritingState(isLoadingSentence: false, turnId: turnId, nativeSentence: sentence);
     } catch (e) {
       state = WritingState(isLoadingSentence: false, loadError: _messageFor(e));
+    } finally {
+      _isLoadingSentence = false;
     }
   }
 
@@ -163,9 +177,6 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
       turnId: session.currentTurnId,
       nativeSentence: session.currentSentence,
       lastUserTranslation: userAnswer,
-      // Falls back to the raw answer for sessions persisted before this
-      // field existed, where it's absent from session_state.json.
-      completedSentence: session.currentCompletedSentence ?? userAnswer,
     );
   }
 
@@ -182,9 +193,6 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
         isSubmittingTranslation: false,
         translationResult: result,
         lastUserTranslation: userTranslation,
-        completedSentence: result.completedSentence.isNotEmpty
-            ? result.completedSentence
-            : userTranslation,
       );
     } catch (e) {
       state = state.copyWith(isSubmittingTranslation: false, translationError: _messageFor(e));
@@ -211,10 +219,9 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
   }
 
   Future<void> analyzePronunciation(Uint8List audioBytes) async {
-    // The completed (fully target-language) form of the learner's own
-    // submission, not the model answer — matches whatever
-    // WritingListeningScreen just played them via `speakCached`.
-    final target = state.completedSentence;
+    // The learner's own final, fully-target-language submission — matches
+    // whatever WritingListeningScreen just played them via `speakCached`.
+    final target = state.lastUserTranslation;
     if (target == null) return;
     state = state.copyWith(isAnalyzingPronunciation: true, clearPronunciationError: true);
     try {
@@ -250,33 +257,30 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
       type: ExerciseType.writing,
       timestamp: DateTime.now(),
       sentenceInNative: state.nativeSentence,
-      sentenceInTarget: state.translationResult?.referenceTranslation,
+      // The learner's own final (fully target-language, correct) answer —
+      // never `referenceTranslation` (a model example they never actually
+      // wrote themselves).
+      sentenceInTarget: state.lastUserTranslation,
       userAnswer: state.lastUserTranslation,
-      completedSentence: state.completedSentence,
       isCorrect: state.translationResult?.isCorrect,
       pronunciationScore: state.pronunciationResult?.accuracyPercent,
     );
     await sessionService.completeTurnAndSwitchType(
       session,
-      turn: turn,
       nextType: ExerciseType.shadowing,
     );
+    await ref.read(conversationHistoryServiceProvider).append(turn);
 
     // Track this sentence for spaced review — a no-op if it's already
-    // tracked. Uses `completedSentence` (the learner's own submission,
-    // completed into the target language), NOT `referenceTranslation` (a
-    // model example the learner never actually said) — `completedSentence`
-    // is exactly what WritingListeningScreen just cached as TTS audio via
-    // `speakCached`, so this is the string ReviewSessionService.buildReviewSet()'s
-    // cache check needs to find a hit under.
-    final completedSentence = state.completedSentence;
-    if (completedSentence != null && completedSentence.isNotEmpty && state.nativeSentence != null) {
+    // tracked. `lastUserTranslation` is exactly what WritingListeningScreen
+    // just cached as TTS audio via `speakCached`, so this is the string
+    // ReviewSessionService.buildReviewSet()'s cache check needs to find a
+    // hit under.
+    final finalAnswer = state.lastUserTranslation;
+    if (finalAnswer != null && finalAnswer.isNotEmpty && state.nativeSentence != null) {
       await ref
           .read(reviewHistoryServiceProvider)
-          .recordIfNew(
-            sentenceInTarget: completedSentence,
-            sentenceInNative: state.nativeSentence!,
-          );
+          .recordIfNew(sentenceInTarget: finalAnswer, sentenceInNative: state.nativeSentence!);
     }
 
     final newCount = await sessionService.incrementDailyTurnCount();

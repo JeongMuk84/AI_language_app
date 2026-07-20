@@ -19,6 +19,7 @@ class AudioPlayButton extends StatefulWidget {
     this.tooltip,
     this.autoPlay = false,
     this.enabled = true,
+    this.onBeforePlay,
   });
 
   /// Resolves the audio bytes to play. Called once (on first play) and
@@ -26,6 +27,14 @@ class AudioPlayButton extends StatefulWidget {
   /// force it to resolve again (e.g. a genuinely new sentence).
   final Future<Uint8List> Function() audioLoader;
   final String? tooltip;
+
+  /// Called right before this button starts playing (fresh start or resume
+  /// from pause) — never on pause itself. Optional; screens with only ever
+  /// one [AudioPlayButton] on screen at a time have no need for it. Screens
+  /// with several independent instances (e.g. a list of sentences) pass
+  /// `AudioPlaybackRegistry.pauseAll` here so starting one stops whichever
+  /// other row was mid-playback, instead of overlapping audio.
+  final Future<void> Function()? onBeforePlay;
 
   /// Starts loading (and then playing) immediately when this widget is
   /// first built. Give the widget a fresh `key` (e.g. bump a counter) to
@@ -101,6 +110,8 @@ class _AudioPlayButtonState extends State<AudioPlayButton> {
       await _player.pause();
       return;
     }
+
+    await widget.onBeforePlay?.call();
 
     if (_audioBytes == null) {
       if (_isLoading) return;

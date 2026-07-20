@@ -1,22 +1,26 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../models/conversation_turn.dart';
 import '../models/exercise_type.dart';
 import '../models/learning_sub_step.dart';
 import '../models/review_progress.dart';
 import '../models/session_state.dart';
+import 'day_boundary_service.dart';
 import 'storage_location_service.dart';
 
 /// Reads/writes the in-progress learning session to `session_state.json` in
 /// the app's storage directory (see `StorageLocationService`), so it
-/// survives an app restart. Cleared on "학습 종료" or a detected midnight
-/// rollover (see `HistoryService.finalizeSession`).
+/// survives an app restart. Cleared on "학습 종료" or a detected Pacific-day
+/// rollover (see `HistoryService.finalizeSession`, `DayBoundaryService`).
 class SessionStateService {
-  SessionStateService({StorageLocationService? storageLocationService})
-      : _storageLocationService = storageLocationService ?? StorageLocationService();
+  SessionStateService({
+    StorageLocationService? storageLocationService,
+    DayBoundaryService? dayBoundaryService,
+  }) : _storageLocationService = storageLocationService ?? StorageLocationService(),
+       _dayBoundaryService = dayBoundaryService ?? DayBoundaryService();
 
   final StorageLocationService _storageLocationService;
+  final DayBoundaryService _dayBoundaryService;
 
   Future<File> _stateFile() async {
     final dir = await _storageLocationService.baseDirectory();
@@ -32,9 +36,6 @@ class SessionStateService {
     final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/review_progress.json');
   }
-
-  bool _isSameLocalDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
 
   /// Returns null when there's no active session.
   Future<SessionState?> readState() async {
@@ -65,7 +66,6 @@ class SessionStateService {
   /// requesting the first sentence.
   Future<SessionState> startNewSession({required ExerciseType initialType}) async {
     final state = SessionState(
-      conversationHistory: const [],
       currentExerciseType: initialType,
       sessionStartedAt: DateTime.now(),
     );
@@ -88,7 +88,6 @@ class SessionStateService {
       currentTurnId: turnId,
       currentSubStep: LearningSubStep.first,
       clearCurrentUserAnswer: true,
-      clearCurrentCompletedSentence: true,
     );
     await writeState(updated);
     return updated;
@@ -98,53 +97,52 @@ class SessionStateService {
   /// pair (ShadowingPronunciationScreen / WritingListeningScreen) — called
   /// when the learner moves past dictation/writing, so a restart resumes
   /// into that screen instead of dictation/writing's blank first screen.
-  /// [userAnswer] and [completedSentence], for the writing pair only, are
-  /// the learner's just-graded translation and its target-language-only
-  /// completed form — WritingListeningScreen needs both to resume (the
-  /// latter is the exact sentence it displays/plays/grades against).
+  /// [userAnswer], for the writing pair only, is the learner's own final
+  /// fully-target-language submitted translation — WritingListeningScreen
+  /// needs it to resume (it's the exact sentence displayed/played/graded).
   Future<SessionState> advanceToSecondSubStep(
     SessionState current, {
     String? userAnswer,
-    String? completedSentence,
   }) async {
     final updated = current.copyWith(
       currentSubStep: LearningSubStep.second,
       currentUserAnswer: userAnswer,
-      currentCompletedSentence: completedSentence,
     );
     await writeState(updated);
     return updated;
   }
 
-  /// Appends a completed turn to history and switches the active exercise
-  /// type, clearing the current sentence so the next screen requests a
-  /// fresh one. This is turn *completion* — always resets to the first
-  /// sub-step of the new type, since the very next screen the learner
-  /// lands on is always dictation/writing, never pronunciation/listening.
-  /// Distinct from [advanceToSecondSubStep], which handles the
-  /// in-progress (not-yet-completed) resume case within the same pair.
+  /// Switches the active exercise type, clearing the current sentence so
+  /// the next screen requests a fresh one. This is turn *completion* —
+  /// always resets to the first sub-step of the new type, since the very
+  /// next screen the learner lands on is always dictation/writing, never
+  /// pronunciation/listening. Distinct from [advanceToSecondSubStep], which
+  /// handles the in-progress (not-yet-completed) resume case within the
+  /// same pair.
+  ///
+  /// Does NOT record the completed turn into conversation history itself —
+  /// callers append it via `ConversationHistoryService` (kept per target
+  /// language; see its doc comment) separately.
   Future<SessionState> completeTurnAndSwitchType(
     SessionState current, {
-    required ConversationTurn turn,
     required ExerciseType nextType,
   }) async {
     final updated = current.copyWith(
-      conversationHistory: [...current.conversationHistory, turn],
       currentExerciseType: nextType,
       clearCurrentSentence: true,
       clearCurrentTurnId: true,
       currentSubStep: LearningSubStep.first,
       clearCurrentUserAnswer: true,
-      clearCurrentCompletedSentence: true,
     );
     await writeState(updated);
     return updated;
   }
 
-  /// Turns (shadowing + writing) completed today (local calendar day),
-  /// 0-[kDailyTurnLimit]. Resets automatically once the stored date no
-  /// longer matches today — same "same local calendar day" comparison used
-  /// for session rollover in `app_router.dart`. Persisted separately from
+  /// Turns (shadowing + writing) completed today (Pacific calendar day —
+  /// see `DayBoundaryService`, which matches when Gemini's free-tier daily
+  /// quota actually resets), 0-[kDailyTurnLimit]. Resets automatically once
+  /// the stored date no longer matches today — same comparison used for
+  /// session rollover in `app_router.dart`. Persisted separately from
   /// `session_state.json` since it must survive "학습 종료"/session
   /// finalization (which clears that file) and keep counting across
   /// however many sessions happen today.
@@ -155,7 +153,7 @@ class SessionStateService {
     if (content.trim().isEmpty) return 0;
     final json = jsonDecode(content) as Map<String, dynamic>;
     final date = DateTime.parse(json['date'] as String);
-    if (!_isSameLocalDay(date, DateTime.now())) return 0;
+    if (!_dayBoundaryService.isSamePacificDay(date, DateTime.now())) return 0;
     return json['count'] as int? ?? 0;
   }
 
@@ -181,7 +179,7 @@ class SessionStateService {
 
   /// The in-progress review session, if any — its mere presence *is*
   /// "isInReviewMode". Null if there's none, or if the stored one started
-  /// on an earlier local calendar day (that one is discarded here so a
+  /// on an earlier Pacific calendar day (that one is discarded here so a
   /// stale review is never silently resumed into a new day; the caller is
   /// responsible for building a fresh set in that case).
   Future<ReviewProgress?> readReviewProgress() async {
@@ -190,7 +188,7 @@ class SessionStateService {
     final content = await file.readAsString();
     if (content.trim().isEmpty) return null;
     final progress = ReviewProgress.fromJson(jsonDecode(content) as Map<String, dynamic>);
-    if (!_isSameLocalDay(progress.startedAt, DateTime.now())) {
+    if (!_dayBoundaryService.isSamePacificDay(progress.startedAt, DateTime.now())) {
       await clearReviewProgress();
       return null;
     }

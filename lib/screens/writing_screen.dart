@@ -49,7 +49,6 @@ class _WritingScreenState extends ConsumerState<WritingScreen> {
       await sessionService.advanceToSecondSubStep(
         session,
         userAnswer: vmState.lastUserTranslation,
-        completedSentence: vmState.completedSentence,
       );
     }
     if (mounted) context.go('/learning/writing/listening');
@@ -140,7 +139,13 @@ class _WritingScreenState extends ConsumerState<WritingScreen> {
                 const SizedBox(height: 16),
                 FeedbackBox(
                   feedback: state.translationResult!.feedback,
-                  isCorrect: state.translationResult!.isCorrect,
+                  // Reflects the actual turn-completion gate
+                  // (`canProceedToListening`), not just the target-language
+                  // portion's grammar — a grammatically-correct attempt
+                  // that still mixes in native-language words must not show
+                  // as "done" here, since it still needs the learner to
+                  // finish rewriting it entirely in the target language.
+                  isCorrect: state.canProceedToListening,
                   errors: state.translationResult!.errors,
                 ),
                 if (state.translationResult!.mixedLanguageSegments.isNotEmpty) ...[

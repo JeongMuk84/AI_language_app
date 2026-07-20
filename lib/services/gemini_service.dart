@@ -82,6 +82,16 @@ class GeminiService {
 
   static const _model = 'gemini-flash-lite-latest';
 
+  /// Level returned by [evaluateLevelTest] outright (no Gemini call) when
+  /// too few questions were answered to grade meaningfully.
+  static const _kEasiestLevel = 'A1';
+
+  /// Minimum fraction of placement-test questions that must actually be
+  /// answered before attempting real grading; below this, [evaluateLevelTest]
+  /// returns [_kEasiestLevel] directly. 0.3 -> skip grading once 70%+ of
+  /// the test is blank.
+  static const _kMinAnsweredRatioForGrading = 0.3;
+
   /// Text-to-speech capable model. Returns raw PCM audio inline (see
   /// [synthesizeSpeech]), not a standard container — this is a Gemini API
   /// behavior this app hasn't been able to verify against a live key in
@@ -176,11 +186,33 @@ Return ONLY raw JSON, no markdown fences:
     required List<LevelTestQuestion> questions,
     required List<String> answers,
   }) async {
+    if (questions.isEmpty) return _kEasiestLevel;
+
+    final blankCount = questions
+        .asMap()
+        .entries
+        .where((e) => (e.key < answers.length ? answers[e.key] : '').trim().isEmpty)
+        .length;
+    final blankRatio = blankCount / questions.length;
+
+    // Deterministic safeguard, not just a prompt instruction: a model that
+    // sees mostly-blank answers has, in practice, still returned a level a
+    // notch above "knows nothing" (e.g. A2 off 2/10 answered) rather than
+    // reliably bottoming out at A1 - the same kind of intermittent
+    // instruction-following gap seen elsewhere in this file. Below
+    // [_kMinAnsweredRatioForGrading] answered, skip Gemini entirely (no
+    // API call spent) and hand back the easiest level outright.
+    if (blankRatio >= 1 - _kMinAnsweredRatioForGrading) {
+      _log('evaluateLevelTest: $blankCount/${questions.length} blank, skipping grading -> $_kEasiestLevel');
+      return _kEasiestLevel;
+    }
+
     final transcript = StringBuffer();
     for (var i = 0; i < questions.length; i++) {
       final q = questions[i];
       final answer = i < answers.length ? answers[i] : '';
-      transcript.writeln('${i + 1}. (${q.sourceLang}) ${q.prompt} -> $answer');
+      final answerText = answer.trim().isEmpty ? '(left blank)' : answer;
+      transcript.writeln('${i + 1}. (${q.sourceLang}) ${q.prompt} -> $answerText');
     }
     return _dedupe('evaluateLevelTest:$nativeLang:$targetLang:${transcript.toString().hashCode}', () async {
       final apiKey = await _requireApiKey();
@@ -189,6 +221,16 @@ Grade this $nativeLang<->$targetLang placement test (question, then the
 learner's answer):
 
 $transcript
+
+Grading rules:
+- A question marked "(left blank)" was NOT answered - count it as WRONG,
+  the same as a genuinely incorrect answer. Never simply exclude blank
+  questions from grading or estimate the level from only the answered
+  ones; the level must reflect all ${questions.length} questions.
+- If only a small number of questions were actually answered, be
+  conservative: when in doubt between two levels, pick the EASIER one.
+  A couple of lucky/short correct answers on an otherwise blank test is
+  not evidence of a higher level.
 
 Return ONLY a single CEFR level token: A1, A2, B1, B2, C1, or C2. No other
 text.
@@ -265,7 +307,13 @@ add a $nativeLanguage gloss, do not mix languages. Plain text only - no
 quotes, no labels, no markdown.
 ''';
         final text = await _generateText(apiKey, prompt, label: 'generateNextSentence');
-        return text.trim();
+        final trimmed = text.trim();
+        // Logged so a "what got played doesn't match what got graded" report
+        // can be checked against the exact text generated for this turn -
+        // this, speakCached's, and validateDictation/validateTranslation's
+        // logs below should always show the identical string for one turn.
+        _log('sentence generated for this turn -> "$trimmed"');
+        return trimmed;
       },
     );
   }
@@ -278,6 +326,9 @@ quotes, no labels, no markdown.
     required String original,
     required String userInput,
   }) async {
+    // See the matching log in generateNextSentence - this must always read
+    // the identical string for a given turn.
+    _log('validateDictation grading against original -> "$original"');
     final apiKey = await _requireApiKey();
     final config = await _configService.readConfig();
     final nativeLanguage = config.nativeLanguage ?? 'the native language';
@@ -343,6 +394,10 @@ Return ONLY raw JSON, no markdown fences:
     required String nativeSentence,
     required String userTranslation,
   }) async {
+    // See generateNextSentence's matching log - this must always read the
+    // identical string generated for this turn (WritingViewModel's
+    // `nativeSentence`, never separately recomputed).
+    _log('validateTranslation grading against nativeSentence -> "$nativeSentence"');
     final apiKey = await _requireApiKey();
     final config = await _configService.readConfig();
     final targetLanguage = config.targetLanguage ?? 'the target language';
@@ -360,13 +415,21 @@ phrases they don't know yet (e.g. a $nativeLanguage speaker learning
 Vietnamese might write "Tôi muốn 예약하다 nhà hàng", mixing $nativeLanguage
 into an otherwise $targetLanguage sentence). This is expected learning
 behavior, not an error: a $nativeLanguage segment means "the learner
-doesn't know this yet," not "the learner got this wrong."
+doesn't know this yet," not "the learner got this wrong." Do NOT invent a
+completed or corrected version of the sentence anywhere in your response -
+the learner must write the whole thing themselves in $targetLanguage; your
+job here is only to explain each native-language part, never to supply a
+finished replacement sentence.
 
-Grading rule: judge correctness based on the $targetLanguage portion(s) of
+Grading rule: judge "isCorrect" based on the $targetLanguage portion(s) of
 the attempt only - their grammar, word choice, and whether they fit
-meaningfully into the sentence. Do NOT mark the answer wrong purely because
-part of it is in $nativeLanguage; that part is simply ungraded here and
-instead surfaced below as a learning opportunity.
+meaningfully into the sentence. Do NOT mark "isCorrect" false purely
+because part of it is in $nativeLanguage; that part is simply ungraded
+here and instead surfaced below as a learning opportunity via
+"mixedLanguageSegments". (The app separately treats ANY native-language
+segment as blocking the turn from being complete, regardless of
+"isCorrect" - that's a different, deliberate rule on the app side, not
+something you need to reflect by changing "isCorrect".)
 
 If the attempt is incomplete as a sentence - just a word or two, or a
 phrase that trails off - mark it incorrect ("isCorrect": false) and explain
@@ -375,18 +438,11 @@ way you'd explain a grammar mistake.
 
 If any part of the attempt is in $nativeLanguage, identify each such
 segment (exactly as the learner wrote it) and, for each, provide how to say
-it in $targetLanguage plus a short nuance/alternatives note. If the entire
-attempt is already in $targetLanguage, return an empty array for
-"mixedLanguageSegments".
-
-Also produce "completedSentence": the learner's own attempt rewritten
-entirely in $targetLanguage, with every $nativeLanguage segment replaced by
-its $targetLanguage equivalent so the whole thing reads as one natural
-$targetLanguage sentence (adjust grammar/word order around the substitution
-as needed rather than pasting the replacement in verbatim if that would
-read unnaturally). If the attempt was already entirely in $targetLanguage,
-"completedSentence" is that same sentence (fix obvious typos only, don't
-otherwise rewrite it).
+it in $targetLanguage plus a short nuance/alternatives note, in
+"mixedLanguageSegments" - this is a hint for the learner to apply
+themselves, not something the app assembles into an answer for them. If
+the entire attempt is already in $targetLanguage, return an empty array
+for "mixedLanguageSegments".
 
 ERRORS - within the $targetLanguage portion only (never for the
 $nativeLanguage segments already covered by "mixedLanguageSegments" above;
@@ -416,8 +472,8 @@ Field-by-field language rules (do not mix these up):
   "errors" below, not crammed in here.
 - "referenceTranslation": a natural, correct translation of the native
   sentence, written ENTIRELY in $targetLanguage. This is a model answer for
-  comparison only - it is NOT what gets read/said aloud next (that's
-  "completedSentence" below).
+  comparison only - the learner never sees it presented as their own
+  answer, and it is NOT read/said aloud on their behalf.
 - "mixedLanguageSegments[].originalSegment": the $nativeLanguage text
   exactly as the learner wrote it.
 - "mixedLanguageSegments[].suggestedTranslation": how to say that segment,
@@ -430,18 +486,13 @@ Field-by-field language rules (do not mix these up):
   sentence), written in $targetLanguage.
 - "errors[].explanation": why, written in $nativeLanguage - for tone/
   diacritic mistakes, name the specific mark and where it belongs.
-- "completedSentence": the learner's own sentence, ENTIRELY in
-  $targetLanguage as described above. This IS the exact sentence the
-  learner will read/say aloud next, so it must be natural and complete -
-  never a $nativeLanguage explanation.
 
 Return ONLY raw JSON, no markdown fences:
 {"isCorrect":true|false,
 "feedback":"1-2 sentences in $nativeLanguage, overall comment only",
 "referenceTranslation":"a natural, correct $targetLanguage translation",
 "mixedLanguageSegments":[{"originalSegment":"...exactly as the learner wrote it","suggestedTranslation":"...in $targetLanguage","explanation":"...in $nativeLanguage"}],
-"errors":[{"userWrote":"...exactly as written, in $targetLanguage","shouldBe":"...corrected word/phrase only, in $targetLanguage","explanation":"...in $nativeLanguage"}],
-"completedSentence":"the learner's sentence, entirely in $targetLanguage"}
+"errors":[{"userWrote":"...exactly as written, in $targetLanguage","shouldBe":"...corrected word/phrase only, in $targetLanguage","explanation":"...in $nativeLanguage"}]}
 ''';
       final text = await _generateText(apiKey, prompt, label: 'validateTranslation');
       final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
@@ -631,6 +682,10 @@ Return ONLY raw JSON, no markdown fences:
     required Uint8List audioBytes,
     required String targetSentence,
   }) async {
+    // See generateNextSentence's matching log - must always read the
+    // identical string that was actually played (ShadowingState.sentence /
+    // WritingState.lastUserTranslation, never separately recomputed).
+    _log('analyzePronunciation comparing against targetSentence -> "$targetSentence"');
     final config = await _configService.readConfig();
     final nativeLanguage = config.nativeLanguage ?? 'the native language';
     final targetLanguage = config.targetLanguage ?? 'the target language';
@@ -733,6 +788,10 @@ Return ONLY raw JSON, no markdown fences:
   /// whichever voice the sentence was originally synthesized with, so the
   /// same sentence doesn't change voice between replays.
   Future<Uint8List> speakCached(String sentence) async {
+    // See generateNextSentence's matching log - the exact text sent to TTS
+    // (and used as the cache key) must always be the identical string
+    // generated for this turn.
+    _log('speakCached synthesizing/caching -> "$sentence"');
     final config = await _configService.readConfig();
     final targetLanguage = config.targetLanguage ?? 'the target language';
     return _dedupe('speakCached:$targetLanguage:$sentence', () async {

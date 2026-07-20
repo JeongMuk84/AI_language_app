@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
 
 import 'router/app_router.dart';
 import 'services/api_key_storage_service.dart';
 import 'services/config_service.dart';
+import 'services/conversation_history_service.dart';
+import 'services/day_boundary_service.dart';
 import 'services/handoff_service.dart';
 import 'services/history_service.dart';
 import 'services/review_history_service.dart';
@@ -38,6 +41,16 @@ const _resetHistory = bool.fromEnvironment('RESET_HISTORY');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Loads the IANA time zone database so DayBoundaryService can resolve
+  // "America/Los_Angeles" (DST-aware) — must happen before anything reads
+  // a day boundary.
+  tz_data.initializeTimeZones();
+
+  final dayBoundaryService = DayBoundaryService();
+  debugPrint(
+    '[La Fly] Day boundary check - Pacific date: ${dayBoundaryService.currentPacificDate()}, '
+    'device local date: ${DateTime.now()}',
+  );
 
   final storageLocationService = StorageLocationService();
   final baseDir = await storageLocationService.baseDirectory();
@@ -46,10 +59,12 @@ Future<void> main() async {
 
   final configService = ConfigService(storageLocationService: storageLocationService);
   debugPrint('[La Fly] config.json path: ${await configService.configFilePath()}');
+  await storageLocationService.migrateToPerLanguageStorageIfNeeded(configService: configService);
 
   await applyResetFlags(
     configService: configService,
     storageLocationService: storageLocationService,
+    dayBoundaryService: dayBoundaryService,
   );
 
   runApp(
@@ -67,6 +82,7 @@ Future<void> main() async {
 Future<void> applyResetFlags({
   required ConfigService configService,
   required StorageLocationService storageLocationService,
+  required DayBoundaryService dayBoundaryService,
 }) async {
   final targets = <String, bool>{
     'API Key': _resetApp || _resetKey,
@@ -75,9 +91,10 @@ Future<void> applyResetFlags({
     'history': _resetApp || _resetHistory,
     'handoff files': _resetApp,
     'daily progress': _resetApp,
-    'TTS cache': _resetApp,
-    'review history': _resetApp,
+    'TTS cache (all languages)': _resetApp,
+    'review history (all languages)': _resetApp,
     'review progress': _resetApp,
+    'conversation history (all languages)': _resetApp,
   };
 
   if (!targets.values.any((shouldClear) => shouldClear)) {
@@ -90,12 +107,23 @@ Future<void> applyResetFlags({
   if (targets['config.json']!) {
     await configService.clearConfig();
   }
-  final sessionStateService = SessionStateService(storageLocationService: storageLocationService);
+  final sessionStateService = SessionStateService(
+    storageLocationService: storageLocationService,
+    dayBoundaryService: dayBoundaryService,
+  );
   if (targets['session state']!) {
     await sessionStateService.clearSession();
   }
   if (targets['history']!) {
-    await HistoryService(storageLocationService: storageLocationService).clearHistory();
+    await HistoryService(
+      storageLocationService: storageLocationService,
+      sessionStateService: sessionStateService,
+      dayBoundaryService: dayBoundaryService,
+      conversationHistoryService: ConversationHistoryService(
+        storageLocationService: storageLocationService,
+        configService: configService,
+      ),
+    ).clearHistory();
   }
   if (targets['handoff files']!) {
     await HandoffService(storageLocationService: storageLocationService).clearHandoffFiles();
@@ -103,14 +131,26 @@ Future<void> applyResetFlags({
   if (targets['daily progress']!) {
     await sessionStateService.clearDailyProgress();
   }
-  if (targets['TTS cache']!) {
-    await TtsCacheService(storageLocationService: storageLocationService).clearCache();
+  if (targets['TTS cache (all languages)']!) {
+    await TtsCacheService(
+      storageLocationService: storageLocationService,
+      configService: configService,
+    ).clearCache();
   }
-  if (targets['review history']!) {
-    await ReviewHistoryService(storageLocationService: storageLocationService).clearHistory();
+  if (targets['review history (all languages)']!) {
+    await ReviewHistoryService(
+      storageLocationService: storageLocationService,
+      configService: configService,
+    ).clearHistory();
   }
   if (targets['review progress']!) {
     await sessionStateService.clearReviewProgress();
+  }
+  if (targets['conversation history (all languages)']!) {
+    await ConversationHistoryService(
+      storageLocationService: storageLocationService,
+      configService: configService,
+    ).clearAllLanguages();
   }
 
   final cleared = targets.entries.where((e) => e.value).map((e) => e.key).join(', ');

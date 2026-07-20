@@ -85,12 +85,20 @@ class _DictionaryScreenState extends ConsumerState<DictionaryScreen> {
             TextField(
               controller: _controller,
               enabled: !_isLookingUp,
-              minLines: 1,
-              maxLines: 3,
+              // Single-line on purpose: this field never needs a newline,
+              // so Enter (hardware keyboard) or the mobile keyboard's
+              // search/done key should submit instead of inserting one —
+              // a multi-line field (maxLines > 1) would swallow Enter as a
+              // literal newline instead of firing onSubmitted below.
+              maxLines: 1,
+              textInputAction: TextInputAction.search,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
                 hintText: 'Type a word or phrase, in either language',
               ),
+              // Reuses the exact same handler as the lookup button below —
+              // same empty-input guard, same loading state, no duplicated
+              // logic.
               onSubmitted: (_) => _lookup(),
             ),
             const SizedBox(height: 12),

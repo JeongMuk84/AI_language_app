@@ -2,9 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/api_key_storage_service.dart';
 import '../services/config_service.dart';
+import '../services/conversation_history_service.dart';
+import '../services/day_boundary_service.dart';
 import '../services/gemini_service.dart';
 import '../services/handoff_service.dart';
 import '../services/history_service.dart';
+import '../services/listening_history_service.dart';
 import '../services/review_history_service.dart';
 import '../services/review_session_service.dart';
 import '../services/session_state_service.dart';
@@ -14,6 +17,8 @@ import '../services/tts_cache_service.dart';
 final storageLocationServiceProvider =
     Provider<StorageLocationService>((ref) => StorageLocationService());
 
+final dayBoundaryServiceProvider = Provider<DayBoundaryService>((ref) => DayBoundaryService());
+
 final configServiceProvider = Provider<ConfigService>((ref) {
   return ConfigService(storageLocationService: ref.read(storageLocationServiceProvider));
 });
@@ -22,7 +27,10 @@ final apiKeyStorageServiceProvider =
     Provider<ApiKeyStorageService>((ref) => ApiKeyStorageService());
 
 final ttsCacheServiceProvider = Provider<TtsCacheService>((ref) {
-  return TtsCacheService(storageLocationService: ref.read(storageLocationServiceProvider));
+  return TtsCacheService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    configService: ref.read(configServiceProvider),
+  );
 });
 
 final geminiServiceProvider = Provider<GeminiService>((ref) {
@@ -38,22 +46,45 @@ final handoffServiceProvider = Provider<HandoffService>((ref) {
 });
 
 final sessionStateServiceProvider = Provider<SessionStateService>((ref) {
-  return SessionStateService(storageLocationService: ref.read(storageLocationServiceProvider));
+  return SessionStateService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    dayBoundaryService: ref.read(dayBoundaryServiceProvider),
+  );
+});
+
+final conversationHistoryServiceProvider = Provider<ConversationHistoryService>((ref) {
+  return ConversationHistoryService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    configService: ref.read(configServiceProvider),
+  );
 });
 
 final historyServiceProvider = Provider<HistoryService>((ref) {
   return HistoryService(
     sessionStateService: ref.read(sessionStateServiceProvider),
+    conversationHistoryService: ref.read(conversationHistoryServiceProvider),
     storageLocationService: ref.read(storageLocationServiceProvider),
+    dayBoundaryService: ref.read(dayBoundaryServiceProvider),
   );
 });
 
 final reviewHistoryServiceProvider = Provider<ReviewHistoryService>((ref) {
-  return ReviewHistoryService(storageLocationService: ref.read(storageLocationServiceProvider));
+  return ReviewHistoryService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    configService: ref.read(configServiceProvider),
+  );
 });
 
 final reviewSessionServiceProvider = Provider<ReviewSessionService>((ref) {
   return ReviewSessionService(
+    reviewHistoryService: ref.read(reviewHistoryServiceProvider),
+    ttsCacheService: ref.read(ttsCacheServiceProvider),
+    configService: ref.read(configServiceProvider),
+  );
+});
+
+final listeningHistoryServiceProvider = Provider<ListeningHistoryService>((ref) {
+  return ListeningHistoryService(
     reviewHistoryService: ref.read(reviewHistoryServiceProvider),
     ttsCacheService: ref.read(ttsCacheServiceProvider),
     configService: ref.read(configServiceProvider),

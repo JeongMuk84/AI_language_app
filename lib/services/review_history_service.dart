@@ -2,24 +2,42 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/review_record.dart';
+import '../utils/language_key.dart';
+import 'config_service.dart';
 import 'storage_location_service.dart';
 
 /// Reads/writes `review_history.json` — every sentence the learner has
-/// completed a turn on, for spaced review — under the app's storage
-/// directory (see `StorageLocationService`). Deliberately separate from
-/// `TtsCacheService`: the cache exists purely for playback and can evict
-/// entries at any time, while this is the durable learning record
-/// (`firstLearnedAt`/`lastReviewedAt`/`reviewCount`) that review selection
-/// is based on.
+/// completed a turn on, for spaced review — kept strictly per target
+/// language, under `review_history/<languageKey>/review_history.json` (see
+/// [languageStorageKey]), resolved from the CURRENT `config.json` on every
+/// call. Deliberately separate from `TtsCacheService`: the cache exists
+/// purely for playback and can evict entries at any time, while this is the
+/// durable learning record (`firstLearnedAt`/`lastReviewedAt`/
+/// `reviewCount`) that review selection is based on.
 class ReviewHistoryService {
-  ReviewHistoryService({StorageLocationService? storageLocationService})
-      : _storageLocationService = storageLocationService ?? StorageLocationService();
+  ReviewHistoryService({StorageLocationService? storageLocationService, ConfigService? configService})
+    : _storageLocationService = storageLocationService ?? StorageLocationService(),
+      _configService = configService ?? ConfigService();
 
   final StorageLocationService _storageLocationService;
+  final ConfigService _configService;
+
+  /// Parent of every language's review-history folder — used only by
+  /// [clearHistory] (full reset, all languages).
+  Future<Directory> _rootDir() async {
+    final dir = await _storageLocationService.baseDirectory();
+    return Directory('${dir.path}/review_history');
+  }
 
   Future<File> _historyFile() async {
-    final dir = await _storageLocationService.baseDirectory();
-    return File('${dir.path}/review_history.json');
+    final config = await _configService.readConfig();
+    final key = languageStorageKey(config.targetLanguage ?? 'unknown');
+    final root = await _rootDir();
+    final languageDir = Directory('${root.path}/$key');
+    if (!await languageDir.exists()) {
+      await languageDir.create(recursive: true);
+    }
+    return File('${languageDir.path}/review_history.json');
   }
 
   Future<Map<String, dynamic>> _readRaw() async {
@@ -73,12 +91,16 @@ class ReviewHistoryService {
     await _writeRaw(raw);
   }
 
-  /// Deletes the entire review history. Used by the `RESET_APP` dev/test
-  /// flag and Settings' "Reset All Data".
+  /// Deletes every language's review history. Used by the `RESET_APP`
+  /// dev/test flag and Settings' "Reset All Data" — a target-language
+  /// switch must NOT call this (see `SettingsViewModel.save`); each
+  /// language's history stays intact so switching back to a
+  /// previously-studied language finds it (and its
+  /// `ListeningHistoryScreen` entries) still there.
   Future<void> clearHistory() async {
-    final file = await _historyFile();
-    if (await file.exists()) {
-      await file.delete();
+    final dir = await _rootDir();
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
     }
   }
 }

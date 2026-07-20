@@ -113,18 +113,21 @@ class _WritingListeningScreenState extends ConsumerState<WritingListeningScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (state.completedSentence != null)
-                HideableSentence(sentence: state.completedSentence!, hidden: state.sentenceHidden),
+              if (state.lastUserTranslation != null)
+                HideableSentence(
+                  sentence: state.lastUserTranslation!,
+                  hidden: state.sentenceHidden,
+                ),
               const SizedBox(height: 24),
-              if (state.completedSentence != null)
+              if (state.lastUserTranslation != null)
                 Center(
                   child: AudioPlayButton(
-                    // Plays the completed (fully target-language) form of
-                    // what the learner submitted, not the model answer —
-                    // matches the sentence text above and
-                    // `analyzePronunciation`'s comparison target below.
+                    // Plays the learner's own final, fully-target-language
+                    // submission, not a model answer — matches the sentence
+                    // text above and `analyzePronunciation`'s comparison
+                    // target below.
                     audioLoader: () =>
-                        ref.read(geminiServiceProvider).speakCached(state.completedSentence!),
+                        ref.read(geminiServiceProvider).speakCached(state.lastUserTranslation!),
                     tooltip: 'Play your translation',
                   ),
                 ),

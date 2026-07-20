@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../constants/app_identity.dart';
+import '../utils/language_key.dart';
+import 'config_service.dart';
 
 /// Single source of truth for where the app stores its files on disk —
 /// everything lives under `<Documents>/$kAppFolderName/` instead of
@@ -210,5 +212,139 @@ class StorageLocationService {
     } catch (e) {
       debugPrint('[Migration] Could not sanitize review_progress.json paths: $e');
     }
+  }
+
+  /// One-time move of the (formerly language-agnostic) flat
+  /// `tts_cache/`/`review_history.json` into per-target-language folders
+  /// (`audio_cache/<languageKey>/`, `review_history/<languageKey>/`) — see
+  /// `TtsCacheService`/`ReviewHistoryService`. Separate from
+  /// [migrateLegacyDataIfNeeded] (a different migration, already flag-gated
+  /// and completed for existing installs) with its own flag file, so it
+  /// runs exactly once independently of that one's state.
+  ///
+  /// Everything found is attributed to the CURRENT `config.json` target
+  /// language, since a flat cache/history could only have accumulated
+  /// content by actually having studied some language — if there's no
+  /// configured target language (nothing to attribute the data to), this
+  /// is skipped entirely rather than guessing, and can retry on a later
+  /// launch once one is set. Same data-safety rules as
+  /// [migrateLegacyDataIfNeeded]: never deletes a source file, only ever
+  /// deletes a source directory once everything inside made it across, and
+  /// one file/folder failing never aborts the rest.
+  Future<void> migrateToPerLanguageStorageIfNeeded({ConfigService? configService}) async {
+    final base = await baseDirectory();
+    final flagFile = File('${base.path}/.migration_per_language_complete');
+    if (await flagFile.exists()) return;
+
+    final config = await (configService ?? ConfigService(storageLocationService: this)).readConfig();
+    final targetLanguage = config.targetLanguage;
+    if (targetLanguage == null || targetLanguage.trim().isEmpty) {
+      debugPrint('[Migration] No target language configured yet - skipping per-language migration for now.');
+      return;
+    }
+    final key = languageStorageKey(targetLanguage);
+
+    var movedCount = 0;
+    var failedCount = 0;
+
+    Future<bool> moveFile(File source, File destination) async {
+      if (!await source.exists()) return true;
+      if (await destination.exists()) return true;
+      final destinationDir = destination.parent;
+      if (!await destinationDir.exists()) {
+        await destinationDir.create(recursive: true);
+      }
+      try {
+        await source.rename(destination.path);
+        movedCount++;
+        debugPrint('[Migration] Moved ${source.path} to ${destination.path}');
+        return true;
+      } catch (e) {
+        try {
+          await destination.writeAsBytes(await source.readAsBytes());
+          await source.delete();
+          movedCount++;
+          debugPrint('[Migration] Moved ${source.path} to ${destination.path} (via copy)');
+          return true;
+        } catch (e2) {
+          failedCount++;
+          debugPrint('[Migration] FAILED to move ${source.path}: $e2');
+          return false;
+        }
+      }
+    }
+
+    Future<void> moveDirectoryContents(Directory source, Directory destination) async {
+      if (!await source.exists()) return;
+      if (!await destination.exists()) {
+        await destination.create(recursive: true);
+      }
+
+      var allOk = true;
+      await for (final entry in source.list()) {
+        if (entry is! File) continue;
+        final fileName = entry.uri.pathSegments.last;
+        final destFile = File('${destination.path}/$fileName');
+        if (await destFile.exists()) continue;
+        try {
+          await entry.rename(destFile.path);
+          movedCount++;
+        } catch (e) {
+          try {
+            await destFile.writeAsBytes(await entry.readAsBytes());
+            await entry.delete();
+            movedCount++;
+          } catch (e2) {
+            failedCount++;
+            allOk = false;
+            debugPrint('[Migration] FAILED to move ${entry.path}: $e2');
+          }
+        }
+      }
+
+      // Best-effort cleanup only, same reasoning as migrateLegacyDataIfNeeded:
+      // a leftover empty legacy folder is harmless; a cleanup failure must
+      // never look like the migration itself failed.
+      if (allOk) {
+        try {
+          final remaining = await source.list().toList();
+          if (remaining.isEmpty) {
+            await source.delete();
+          }
+        } catch (e) {
+          debugPrint('[Migration] Could not remove now-empty legacy folder ${source.path}: $e');
+        }
+      }
+    }
+
+    Future<void> tryStep(String label, Future<void> Function() step) async {
+      try {
+        await step();
+      } catch (e) {
+        failedCount++;
+        debugPrint('[Migration] FAILED step "$label": $e');
+      }
+    }
+
+    await tryStep(
+      'review_history.json -> review_history/$key/',
+      () => moveFile(
+        File('${base.path}/review_history.json'),
+        File('${base.path}/review_history/$key/review_history.json'),
+      ),
+    );
+    await tryStep(
+      'tts_cache/ -> audio_cache/$key/',
+      () => moveDirectoryContents(
+        Directory('${base.path}/tts_cache'),
+        Directory('${base.path}/audio_cache/$key'),
+      ),
+    );
+
+    await flagFile.writeAsString(DateTime.now().toIso8601String());
+    debugPrint(
+      '[Migration] Per-language migration done (target language: $targetLanguage) - '
+      'moved $movedCount file(s), $failedCount failure(s).',
+    );
   }
 }

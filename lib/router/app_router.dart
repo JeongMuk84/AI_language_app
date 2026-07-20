@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -14,6 +15,7 @@ import '../screens/shadowing_dictation_screen.dart';
 import '../screens/shadowing_pronunciation_screen.dart';
 import '../screens/writing_listening_screen.dart';
 import '../screens/writing_screen.dart';
+import '../services/day_boundary_service.dart';
 import '../services/history_service.dart';
 import '../services/review_session_service.dart';
 import '../services/session_state_service.dart';
@@ -60,6 +62,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   final sessionStateService = ref.read(sessionStateServiceProvider);
   final historyService = ref.read(historyServiceProvider);
   final reviewSessionService = ref.read(reviewSessionServiceProvider);
+  final dayBoundaryService = ref.read(dayBoundaryServiceProvider);
 
   return GoRouter(
     initialLocation: AppRoutes.apiKey,
@@ -106,6 +109,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         sessionStateService: sessionStateService,
         historyService: historyService,
         reviewSessionService: reviewSessionService,
+        dayBoundaryService: dayBoundaryService,
       );
     },
     routes: [
@@ -155,29 +159,38 @@ Future<String> startNextLearningSession({
 /// Section 3 of the core-learning-loop spec: decides where to land when
 /// entering `/learning`.
 ///
-/// (A) An in-progress session exists: same local calendar day -> resume
-///     straight into the persisted exercise type + sub-step's screen (e.g.
-///     shadowing pronunciation, not dictation, if that's where the learner
-///     was — see `LearningSubStep`). A different day (midnight passed) ->
-///     finalize it exactly like "학습 종료" would, then fall through to (B).
-/// (B) No in-progress session: an in-progress review exists (same local
-///     calendar day) -> resume it. No review in progress but there's
-///     history -> build a fresh review set; empty (nothing reviewable) ->
-///     skip straight to (C); otherwise persist it and go review. No
-///     history at all -> (C) with shadowing.
+/// (A) An in-progress session exists: same Pacific calendar day (see
+///     `DayBoundaryService`) -> resume straight into the persisted
+///     exercise type + sub-step's screen (e.g. shadowing pronunciation,
+///     not dictation, if that's where the learner was — see
+///     `LearningSubStep`). A different day -> finalize it exactly like
+///     "학습 종료" would, then fall through to (B).
+/// (B) No in-progress session: an in-progress review exists (same Pacific
+///     calendar day) -> resume it. Otherwise, build a fresh review set
+///     directly from `ReviewSessionService` — empty (nothing reviewable,
+///     including a genuinely brand-new learner with no history at all) ->
+///     (C); otherwise persist it and go review.
 /// (C) Start a new learning session (see `startNextLearningSession`).
 Future<String> _resolveLearningEntryRoute({
   required SessionStateService sessionStateService,
   required HistoryService historyService,
   required ReviewSessionService reviewSessionService,
+  required DayBoundaryService dayBoundaryService,
 }) async {
+  final now = DateTime.now();
+  debugPrint(
+    '[La Fly] Day boundary check - Pacific date: ${dayBoundaryService.currentPacificDate()}, '
+    'device local date: $now',
+  );
+
   final session = await sessionStateService.readState();
 
   if (session != null) {
-    final now = DateTime.now();
-    final startedAt = session.sessionStartedAt;
-    final sameDay =
-        startedAt.year == now.year && startedAt.month == now.month && startedAt.day == now.day;
+    final sameDay = dayBoundaryService.isSamePacificDay(session.sessionStartedAt, now);
+    debugPrint(
+      '[La Fly] Session check - sessionStartedAt: ${session.sessionStartedAt}, '
+      'same Pacific day as now: $sameDay',
+    );
 
     if (sameDay) {
       final onSecondSubStep = session.currentSubStep == LearningSubStep.second;
@@ -195,12 +208,19 @@ Future<String> _resolveLearningEntryRoute({
     return AppRoutes.review;
   }
 
-  final hasHistory = await historyService.hasAnyHistory();
-  if (!hasHistory) {
-    await sessionStateService.startNewSession(initialType: ExerciseType.shadowing);
-    return AppRoutes.shadowingDictation;
-  }
-
+  // Deciding "is there anything to review" directly from the actual
+  // review-eligible data (ReviewSessionService, backed by
+  // ReviewHistoryService + TtsCacheService) rather than
+  // `historyService.hasAnyHistory()` (whether a day-summary file happens
+  // to exist) — the latter is a side artifact only written when
+  // `finalizeSession` successfully runs with a non-empty conversation
+  // history, so it can go stale/empty while real, reviewable learning
+  // data already exists (observed live: history/ empty, but
+  // review_history/<language>/review_history.json full of real entries
+  // with cached audio) and incorrectly skip straight past review.
+  // `buildReviewSet()` already returns an empty list cheaply (a single
+  // empty-map read) for a genuinely brand-new learner, so this isn't a
+  // meaningfully more expensive check for that case.
   final reviewSet = await reviewSessionService.buildReviewSet();
   if (reviewSet.isEmpty) {
     return startNextLearningSession(
@@ -210,7 +230,7 @@ Future<String> _resolveLearningEntryRoute({
   }
 
   await sessionStateService.writeReviewProgress(
-    ReviewProgress(reviewItemList: reviewSet, reviewCurrentIndex: 0, startedAt: DateTime.now()),
+    ReviewProgress(reviewItemList: reviewSet, reviewCurrentIndex: 0, startedAt: now),
   );
   return AppRoutes.review;
 }

@@ -88,9 +88,29 @@ class ShadowingViewModel extends Notifier<ShadowingState>
   @override
   ShadowingState build() => const ShadowingState();
 
+  /// Guards against two overlapping [loadSentence] calls both racing past
+  /// the "does the persisted session already have a sentence" check before
+  /// either has written its result — e.g. a duplicate `initState` trigger
+  /// or a rebuild landing mid-flight. Without this, both could reach
+  /// `generateNextSentence` and each get back a genuinely different
+  /// sentence (Gemini isn't guaranteed to repeat itself), and whichever
+  /// assignment lands last would silently become "the" sentence for this
+  /// turn while anything that already captured the earlier one (e.g. an
+  /// `AudioPlayButton` that already started loading audio for it) would be
+  /// left referencing stale text — precisely the kind of TTS/grading
+  /// mismatch this method exists to prevent. Not a full mutex, just enough
+  /// to make re-entrant calls within this Notifier instance a no-op.
+  bool _isLoadingSentence = false;
+
   /// Restores the in-progress sentence from the persisted session if one
   /// exists (resume case), otherwise requests a new one and persists it.
+  /// [currentSentence]/[currentTurnId] end up as the single reference for
+  /// this whole turn once this returns — see [ShadowingState.sentence]'s
+  /// use in the TTS player, `submitDictation`'s grading call, and
+  /// `analyzePronunciation`, all of which must read the exact same value.
   Future<void> loadSentence() async {
+    if (_isLoadingSentence) return;
+    _isLoadingSentence = true;
     state = const ShadowingState();
     try {
       final sessionService = ref.read(sessionStateServiceProvider);
@@ -105,10 +125,8 @@ class ShadowingViewModel extends Notifier<ShadowingState>
         sentence = session.currentSentence!;
         turnId = session.currentTurnId!;
       } else {
-        sentence = await gemini.generateNextSentence(
-          direction: 'target',
-          history: session.conversationHistory,
-        );
+        final history = await ref.read(conversationHistoryServiceProvider).readAll();
+        sentence = await gemini.generateNextSentence(direction: 'target', history: history);
         turnId = newTurnId();
         await sessionService.setCurrentSentence(session, sentence: sentence, turnId: turnId);
       }
@@ -116,6 +134,8 @@ class ShadowingViewModel extends Notifier<ShadowingState>
       state = ShadowingState(isLoadingSentence: false, turnId: turnId, sentence: sentence);
     } catch (e) {
       state = ShadowingState(isLoadingSentence: false, loadError: _messageFor(e));
+    } finally {
+      _isLoadingSentence = false;
     }
   }
 
@@ -200,9 +220,9 @@ class ShadowingViewModel extends Notifier<ShadowingState>
     );
     await sessionService.completeTurnAndSwitchType(
       session,
-      turn: turn,
       nextType: ExerciseType.writing,
     );
+    await ref.read(conversationHistoryServiceProvider).append(turn);
 
     // Track this sentence for spaced review — a no-op if it's already
     // tracked (e.g. a retried/re-encountered sentence).

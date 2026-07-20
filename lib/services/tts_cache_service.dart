@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../utils/language_key.dart';
+import 'config_service.dart';
 import 'storage_location_service.dart';
 
 /// A cached TTS clip, plus the voice it was originally synthesized with.
@@ -17,13 +19,14 @@ class TtsCacheHit {
 class TtsCacheLocation {
   const TtsCacheLocation({required this.path, required this.voice});
 
-  /// The cached `.wav` file's name WITHIN the `tts_cache/` directory —
-  /// deliberately just a bare filename, not an absolute path, so it stays
-  /// valid regardless of where `StorageLocationService.baseDirectory()`
-  /// resolves to on a given machine/run. Resolve against
-  /// `StorageLocationService` + `'tts_cache'` if a real file path is ever
-  /// needed; currently nothing reads this for actual playback (see
-  /// `ReviewScreen`, which re-resolves via `TtsCacheService.get` instead).
+  /// The cached `.wav` file's name WITHIN the current target language's
+  /// `audio_cache/<languageKey>/` directory — deliberately just a bare
+  /// filename, not an absolute path, so it stays valid regardless of where
+  /// `StorageLocationService.baseDirectory()` resolves to on a given
+  /// machine/run. Resolve against `StorageLocationService` +
+  /// `'audio_cache/<languageKey>'` if a real file path is ever needed;
+  /// currently nothing reads this for actual playback (see `ReviewScreen`,
+  /// which re-resolves via `TtsCacheService.get` instead).
   final String path;
   final String voice;
 }
@@ -33,22 +36,36 @@ class TtsCacheLocation {
 /// (including replaying the same sentence again later, or resuming a
 /// session across app restarts) never calls Gemini.
 ///
-/// Cache metadata (which sentence maps to which audio file, when it was
-/// last used, and which voice it was synthesized with) lives in a single
-/// `manifest.json` alongside the cached `.wav` files, under the app's
-/// storage directory (see `StorageLocationService`). Capped at
-/// [_maxEntries] entries, evicted least-recently-used first.
+/// Kept strictly per target language, under
+/// `audio_cache/<languageKey>/manifest.json` + `.wav` files (see
+/// [languageStorageKey]) — resolved from the CURRENT `config.json` on every
+/// call, so switching target languages transparently switches which
+/// language's cache is read/written without any caller needing to know
+/// about it. The [_maxEntries] LRU cap applies per language folder: a full
+/// Vietnamese cache never evicts Spanish entries or vice versa.
 class TtsCacheService {
-  TtsCacheService({StorageLocationService? storageLocationService})
-      : _storageLocationService = storageLocationService ?? StorageLocationService();
+  TtsCacheService({StorageLocationService? storageLocationService, ConfigService? configService})
+    : _storageLocationService = storageLocationService ?? StorageLocationService(),
+      _configService = configService ?? ConfigService();
 
   final StorageLocationService _storageLocationService;
+  final ConfigService _configService;
 
   static const _maxEntries = 100;
 
-  Future<Directory> _cacheDir() async {
+  /// Parent of every language's cache folder — used only by [clearCache]
+  /// (full reset, all languages) since normal reads/writes always go
+  /// through [_cacheDir] for the current language.
+  Future<Directory> _rootCacheDir() async {
     final dir = await _storageLocationService.baseDirectory();
-    final cacheDir = Directory('${dir.path}/tts_cache');
+    return Directory('${dir.path}/audio_cache');
+  }
+
+  Future<Directory> _cacheDir() async {
+    final config = await _configService.readConfig();
+    final key = languageStorageKey(config.targetLanguage ?? 'unknown');
+    final root = await _rootCacheDir();
+    final cacheDir = Directory('${root.path}/$key');
     if (!await cacheDir.exists()) {
       await cacheDir.create(recursive: true);
     }
@@ -125,7 +142,8 @@ class TtsCacheService {
   }
 
   /// Stores newly-synthesized audio for (sentence, language), evicting the
-  /// least-recently-used entry first if this would exceed [_maxEntries].
+  /// least-recently-used entry first if this would exceed [_maxEntries]
+  /// (within this language's own folder only).
   Future<void> put({
     required String sentence,
     required String language,
@@ -169,10 +187,13 @@ class TtsCacheService {
     }
   }
 
-  /// Deletes the entire cache. Used by the `RESET_APP` dev/test flag and
-  /// Settings' "Reset All Data".
+  /// Deletes every language's cache. Used by the `RESET_APP` dev/test flag
+  /// and Settings' "Reset All Data" — a target-language switch must NOT
+  /// call this (see `SettingsViewModel.save`); each language's cache stays
+  /// intact so switching back to a previously-studied language finds its
+  /// audio (and thus its `ListeningHistoryScreen` entries) still there.
   Future<void> clearCache() async {
-    final dir = await _cacheDir();
+    final dir = await _rootCacheDir();
     if (await dir.exists()) {
       await dir.delete(recursive: true);
     }
@@ -180,7 +201,7 @@ class TtsCacheService {
 
   /// 32-bit FNV-1a hash, hex-encoded — deterministic and filesystem-safe.
   /// Not cryptographic; collisions are astronomically unlikely at the
-  /// ~100-entry scale this cache runs at.
+  /// ~100-entry scale this cache runs at (per language).
   String _fnv1aHex(String input) {
     const fnvPrime = 0x01000193;
     var hash = 0x811c9dc5;

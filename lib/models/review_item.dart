@@ -21,8 +21,9 @@ class ReviewItem {
   final String sentenceInTarget;
   final String sentenceInNative;
 
-  /// Bare filename (not an absolute path) of the cached `.wav` within
-  /// `tts_cache/` — see `TtsCacheLocation.path`.
+  /// Bare filename (not an absolute path) of the cached `.wav` within the
+  /// current target language's `audio_cache/<languageKey>/` folder — see
+  /// `TtsCacheLocation.path`.
   final String? cachedAudioPath;
   final String? voiceUsed;
 

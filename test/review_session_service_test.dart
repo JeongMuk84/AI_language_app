@@ -30,6 +30,21 @@ void main() {
     return dir;
   }
 
+  /// `TtsCacheService`/`ReviewHistoryService` now key everything by target
+  /// language (see `languageStorageKey`) — 'target_language' (the language
+  /// every test below configures) sanitizes to itself unchanged.
+  Directory reviewHistoryDir(Directory docDir) {
+    final dir = Directory('${docDir.path}/review_history/target_language');
+    dir.createSync(recursive: true);
+    return dir;
+  }
+
+  Directory audioCacheDir(Directory docDir) {
+    final dir = Directory('${docDir.path}/audio_cache/target_language');
+    dir.createSync(recursive: true);
+    return dir;
+  }
+
   test('buildReviewSet: pool > 15 selects exactly 15 with no duplicates, '
       'and the 10 most-recently-first-learned are always included', () async {
     final tempDir = await Directory.systemTemp.createTemp('review_test');
@@ -52,10 +67,12 @@ void main() {
         },
     ];
     final reviewHistoryRaw = {for (final r in records) r['sentenceInTarget'] as String: r};
-    await File('${docDir.path}/review_history.json').writeAsString(jsonEncode(reviewHistoryRaw));
+    await File(
+      '${reviewHistoryDir(docDir).path}/review_history.json',
+    ).writeAsString(jsonEncode(reviewHistoryRaw));
 
     // TTS cache: every sentence has a cached clip.
-    final cacheDir = Directory('${docDir.path}/tts_cache')..createSync();
+    final cacheDir = audioCacheDir(docDir);
     final manifest = <String, dynamic>{};
     for (var i = 0; i < 20; i++) {
       final fileName = 'clip_$i.wav';
@@ -110,9 +127,11 @@ void main() {
           'reviewCount': 0,
         },
     };
-    await File('${docDir.path}/review_history.json').writeAsString(jsonEncode(records));
+    await File(
+      '${reviewHistoryDir(docDir).path}/review_history.json',
+    ).writeAsString(jsonEncode(records));
 
-    final cacheDir = Directory('${docDir.path}/tts_cache')..createSync();
+    final cacheDir = audioCacheDir(docDir);
     final manifest = <String, dynamic>{};
     for (var i = 0; i < 5; i++) {
       final fileName = 'clip_$i.wav';
@@ -139,7 +158,7 @@ void main() {
     final docDir = appDir(tempDir);
 
     final now = DateTime.now();
-    await File('${docDir.path}/review_history.json').writeAsString(
+    await File('${reviewHistoryDir(docDir).path}/review_history.json').writeAsString(
       jsonEncode({
         'has_audio': {
           'sentenceInTarget': 'has_audio',
@@ -156,7 +175,7 @@ void main() {
       }),
     );
 
-    final cacheDir = Directory('${docDir.path}/tts_cache')..createSync();
+    final cacheDir = audioCacheDir(docDir);
     await File('${cacheDir.path}/clip.wav').writeAsBytes([0]);
     await File('${cacheDir.path}/manifest.json').writeAsString(
       jsonEncode({

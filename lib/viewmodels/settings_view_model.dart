@@ -105,6 +105,24 @@ class SettingsViewModel extends Notifier<SettingsState> {
     // means clearing it.
     ref.read(conversationSessionProvider.notifier).reset();
 
+    // The in-progress "what am I doing right this second" state
+    // (current sentence/turn/sub-step, in-progress review) belongs to
+    // whichever language was active when it was written — resuming it
+    // under the NEW language is exactly the bug this fixes (switching
+    // Vietnamese -> Spanish -> Vietnamese was showing a leftover Spanish
+    // sentence, because nothing here ever cleared session_state.json).
+    // `RestartWidget` only remounts the widget tree; it does not touch
+    // these persisted files, so they must be cleared explicitly.
+    //
+    // This must NOT clear each language's own `audio_cache`/
+    // `review_history`/`conversation_history` (see those services'
+    // `clear*` docs) — switching back to a language the learner already
+    // studied should find that language's own data exactly as they left
+    // it, not wiped. Only `resetAllData` wipes those, for every language.
+    final sessionStateService = ref.read(sessionStateServiceProvider);
+    await sessionStateService.clearSession();
+    await sessionStateService.clearReviewProgress();
+
     await configService.writeConfig(
       AppConfig(
         nativeLanguage: native,
@@ -120,11 +138,16 @@ class SettingsViewModel extends Notifier<SettingsState> {
     return SettingsSaveResult.savedWithRestart;
   }
 
-  /// Wipes every piece of saved app state: the API key, config.json, the
-  /// in-progress session, all history files, all per-language handoff
-  /// files, the daily turn counter, the TTS cache, review history, and any
+  /// Wipes every piece of saved app state, for every language: the API
+  /// key, config.json, the in-progress session, all history files, all
+  /// per-language handoff files, the daily turn counter, every language's
+  /// TTS cache, review history, and conversation history, and any
   /// in-progress review. The caller is responsible for restarting the app
   /// afterward (via `RestartWidget`) so everything re-derives from scratch.
+  ///
+  /// Distinct from a target-language switch (see [save]), which clears
+  /// only the current in-progress session/review and leaves every
+  /// language's cache/history/conversation data intact.
   Future<void> resetAllData() async {
     final sessionStateService = ref.read(sessionStateServiceProvider);
     await ref.read(apiKeyStorageServiceProvider).clearApiKey();
@@ -136,6 +159,7 @@ class SettingsViewModel extends Notifier<SettingsState> {
     await ref.read(ttsCacheServiceProvider).clearCache();
     await ref.read(reviewHistoryServiceProvider).clearHistory();
     await sessionStateService.clearReviewProgress();
+    await ref.read(conversationHistoryServiceProvider).clearAllLanguages();
   }
 }
 

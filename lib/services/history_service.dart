@@ -4,19 +4,30 @@ import 'dart:io';
 import '../models/conversation_turn.dart';
 import '../models/exercise_type.dart';
 import '../models/history_summary.dart';
+import 'conversation_history_service.dart';
+import 'day_boundary_service.dart';
 import 'session_state_service.dart';
 import 'storage_location_service.dart';
 
-/// Reads/writes per-day history files (`history/history_<yyyy-MM-dd>.json`)
-/// summarizing finalized learning sessions, under the app's storage
-/// directory (see `StorageLocationService`).
+/// Reads/writes per-day history files (`history/history_<yyyy-MM-dd>.json`,
+/// dated by Pacific calendar day — see `DayBoundaryService`) summarizing
+/// finalized learning sessions, under the app's storage directory (see
+/// `StorageLocationService`).
 class HistoryService {
-  HistoryService({SessionStateService? sessionStateService, StorageLocationService? storageLocationService})
-      : _sessionStateService = sessionStateService ?? SessionStateService(),
-        _storageLocationService = storageLocationService ?? StorageLocationService();
+  HistoryService({
+    SessionStateService? sessionStateService,
+    ConversationHistoryService? conversationHistoryService,
+    StorageLocationService? storageLocationService,
+    DayBoundaryService? dayBoundaryService,
+  }) : _sessionStateService = sessionStateService ?? SessionStateService(),
+       _conversationHistoryService = conversationHistoryService ?? ConversationHistoryService(),
+       _storageLocationService = storageLocationService ?? StorageLocationService(),
+       _dayBoundaryService = dayBoundaryService ?? DayBoundaryService();
 
   final SessionStateService _sessionStateService;
+  final ConversationHistoryService _conversationHistoryService;
   final StorageLocationService _storageLocationService;
+  final DayBoundaryService _dayBoundaryService;
 
   Future<Directory> _historyDir() async {
     final dir = await _storageLocationService.baseDirectory();
@@ -28,8 +39,9 @@ class HistoryService {
   }
 
   String _dateKey(DateTime date) {
+    final pacificDate = _dayBoundaryService.pacificDateOf(date);
     String pad2(int n) => n.toString().padLeft(2, '0');
-    return '${date.year}-${pad2(date.month)}-${pad2(date.day)}';
+    return '${pacificDate.year}-${pad2(pacificDate.month)}-${pad2(pacificDate.day)}';
   }
 
   Future<File> _fileForDate(DateTime date) async {
@@ -79,7 +91,8 @@ class HistoryService {
     final session = await _sessionStateService.readState();
     if (session == null) return;
 
-    final deduped = _dedupeByLatestTurnId(session.conversationHistory);
+    final conversationHistory = await _conversationHistoryService.readAll();
+    final deduped = _dedupeByLatestTurnId(conversationHistory);
 
     if (deduped.isNotEmpty) {
       final summary = _buildSummary(sessionDate: session.sessionStartedAt, turns: deduped);
@@ -88,6 +101,11 @@ class HistoryService {
     }
 
     await _sessionStateService.clearSession();
+    // Finalizing (day rollover / "학습 종료") ends this language's running
+    // context, same as the old single-file behavior — NOT the same as a
+    // target-language switch, which leaves this alone so switching back
+    // later the same day resumes it (see `ConversationHistoryService`).
+    await _conversationHistoryService.clear();
   }
 
   List<ConversationTurn> _dedupeByLatestTurnId(List<ConversationTurn> turns) {
