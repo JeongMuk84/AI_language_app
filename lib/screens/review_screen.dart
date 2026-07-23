@@ -11,55 +11,82 @@ import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
 import '../widgets/audio_recorder_widget.dart';
 import '../widgets/feedback_box.dart';
+import '../widgets/reset_api_key_button.dart';
 
+/// 스페이스드 리뷰(spaced review) 화면. 라우트 `/learning/review`
+/// (`AppRoutes.review`)에 연결된다. AppRouter의 redirect 로직은 온보딩이
+/// 끝난 뒤 진행 중이던 리뷰가 있거나 새로 만든 리뷰 세트가 비어있지 않을 때
+/// 이 화면으로 보내며, ReviewViewModel(`advance`/`skip`)이 반환하는 라우트를
+/// 통해 다음 학습 화면(Writing 또는 Shadowing Dictation)으로 이어진다.
+/// [ReviewViewModel]을 통해 문항별 번역 제출/채점과 발음 분석을 처리한다.
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key});
 
+  /// 이 위젯의 상태 객체([_ReviewScreenState])를 생성한다.
   @override
   ConsumerState<ReviewScreen> createState() => _ReviewScreenState();
 }
 
+/// [ReviewScreen]의 State. 번역 입력 텍스트필드 컨트롤러와, 문항이 바뀌었는지
+/// 감지하기 위한 마지막으로 본 인덱스를 로컬로 관리한다.
 class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   final _controller = TextEditingController();
   int _lastIndexSeen = -1;
 
+  /// 화면이 처음 마운트될 때 [ReviewViewModel.loadReviewSet]을 호출해 리뷰
+  /// 세트를 불러오기 시작한다.
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(reviewViewModelProvider.notifier).loadReviewSet());
   }
 
+  /// 위젯이 트리에서 제거될 때 [_controller]를 해제해 메모리 누수를 막는다.
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
+  /// Submit 버튼이 눌리면 호출된다. [ReviewViewModel.submitTranslation]으로
+  /// 현재 입력값을 채점 요청으로 보낸다.
   Future<void> _submit() {
     return ref.read(reviewViewModelProvider.notifier).submitTranslation(_controller.text);
   }
 
+  /// AudioRecorderWidget 녹음이 끝나면 호출된다.
+  /// [ReviewViewModel.analyzePronunciation]으로 녹음된 [bytes]를 분석
+  /// 요청으로 보낸다.
   Future<void> _onRecordingComplete(Uint8List bytes) {
     return ref.read(reviewViewModelProvider.notifier).analyzePronunciation(bytes);
   }
 
+  /// "Next Sentence" / "Finish Review & Start Learning" 버튼이 눌리면
+  /// 호출된다. [ReviewViewModel.advance]를 호출해 다음 문항으로 넘어가거나
+  /// 리뷰를 끝내고, 반환된 라우트로 `context.go`한다.
   Future<void> _advance() async {
     final route = await ref.read(reviewViewModelProvider.notifier).advance();
     if (mounted) context.go(route);
   }
 
+  /// "Skip Review & Start Learning" 버튼이 눌리면 호출된다.
+  /// [ReviewViewModel.skip]을 호출해 남은 리뷰를 포기하고, 반환된 라우트로
+  /// `context.go`한다.
   Future<void> _skip() async {
     final route = await ref.read(reviewViewModelProvider.notifier).skip();
     if (mounted) context.go(route);
   }
 
+  /// [ReviewViewModel]을 watch해 리뷰 화면 UI를 그린다: 로딩/로드 에러/빈
+  /// 목록(복습할 것 없음)/실제 문항(문장 재생, 번역 입력+채점, 발음
+  /// 녹음+분석, 다음/건너뛰기 버튼)까지 리뷰 흐름의 각 단계를 담당한다.
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(reviewViewModelProvider);
 
-    // A new item is showing — clear the input left over from the last one,
-    // or (resuming into an item that was already submitted before a
-    // restart/remount) restore exactly what was submitted.
+    // 새 문항이 표시되는 시점 — 이전 문항에 남아있던 입력값을 지우거나,
+    // (재시작/재마운트 이전에 이미 제출된 적 있는 문항으로 재개하는
+    // 경우라면) 그때 제출했던 내용을 그대로 복원한다.
     if (state.currentIndex != _lastIndexSeen) {
       _lastIndexSeen = state.currentIndex;
       _controller.text = state.lastUserTranslation ?? '';
@@ -87,6 +114,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                   onPressed: () => ref.read(reviewViewModelProvider.notifier).loadReviewSet(),
                   child: const Text('Retry'),
                 ),
+                const SizedBox(height: 12),
+                const ResetApiKeyButton(),
                 const SizedBox(height: 12),
                 OutlinedButton(onPressed: _skip, child: const Text('Skip Review & Start Learning')),
               ],
@@ -127,7 +156,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       appBar: buildAppBarWithSettings(
         context,
         'Review',
-        progressLabel: 'Reviewed: ${state.currentIndex}/${state.items.length}',
+        // 1-indexed, matching the "Today: X/Y" daily turn counter elsewhere —
+        // currentIndex is 0 while the first item is in progress, so this
+        // shows "1" for it rather than "0".
+        progressLabel: 'Reviewed: ${state.currentIndex + 1}/${state.items.length}',
       ),
       body: SafeArea(
         child: Column(

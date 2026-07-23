@@ -17,33 +17,41 @@ import 'theme/app_theme.dart';
 import 'viewmodels/theme_mode_view_model.dart';
 import 'widgets/restart_widget.dart';
 
-/// Dev/test convenience flags, applied before normal startup routing runs.
-/// See README.md's "Development" section for usage examples.
+/// 개발/테스트 편의를 위한 플래그들로, 정상적인 시작 라우팅이 실행되기
+/// 전에 적용된다(`--dart-define=RESET_APP=true`처럼 빌드/실행 시
+/// 지정). 사용 예시는 README.md의 "Development" 절 참고.
 ///
-/// `RESET_APP=true` clears everything (API key, config.json, session
-/// state, history, handoff files, the daily turn counter, the TTS cache,
-/// review history, and any in-progress review) — equivalent to the three
-/// flags below combined, plus config.json, handoff files, daily progress,
-/// the TTS cache, and review data (none of which have a flag of their own
-/// since a partial reset that drops native/target language, or leaves the
-/// daily limit/cache/review state stale, wouldn't be a meaningful "full"
-/// reset).
+/// `RESET_APP=true`이면 모든 것을 지운다(API 키, config.json, 세션
+/// 상태, history, handoff 파일들, 일일 turn 카운터, TTS 캐시, 복습
+/// 이력, 진행 중이던 복습까지) — 아래 세 플래그를 합친 것과 동등하며,
+/// 거기에 더해 config.json, handoff 파일, 일일 진행도, TTS 캐시, 복습
+/// 데이터까지 지운다(이 항목들은 각자의 개별 플래그가 없는데, native/
+/// target language를 지우는 부분 초기화나 일일 한도/캐시/복습 상태만
+/// 오래된 채로 남기는 초기화는 의미 있는 "완전" 초기화가 아니기
+/// 때문이다).
 const _resetApp = bool.fromEnvironment('RESET_APP');
 
-/// Clears only the secure-storage API key.
+/// secure storage에 저장된 API 키만 지운다.
 const _resetKey = bool.fromEnvironment('RESET_KEY');
 
-/// Clears only the in-progress session state.
+/// 진행 중이던 세션 상태만 지운다.
 const _resetSession = bool.fromEnvironment('RESET_SESSION');
 
-/// Clears only the saved history files.
+/// 저장된 history 파일만 지운다.
 const _resetHistory = bool.fromEnvironment('RESET_HISTORY');
 
+/// 앱의 진입점(entry point). Flutter 바인딩과 timezone 데이터베이스를
+/// 초기화하고, 저장 위치/설정 서비스를 준비한 뒤 마이그레이션을
+/// 수행하고, dev/test용 `RESET_*` 플래그를 적용한 다음 위젯 트리를
+/// 띄운다. 각 단계가 이 순서로 실행되어야 하는 이유는 아래 각 줄의
+/// 주석 참고(예: timezone 초기화는 `DayBoundaryService`가 Pacific
+/// 날짜를 계산하기 전에 끝나야 하고, storage/config 마이그레이션은
+/// reset 플래그 적용이나 라우팅보다 먼저 끝나야 한다).
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Loads the IANA time zone database so DayBoundaryService can resolve
-  // "America/Los_Angeles" (DST-aware) — must happen before anything reads
-  // a day boundary.
+  // IANA 시간대 데이터베이스를 로드해 DayBoundaryService가
+  // "America/Los_Angeles"를 (DST를 반영해) 해석할 수 있게 한다 — 어떤
+  // 코드든 day boundary를 읽기 전에 반드시 먼저 실행돼야 한다.
   tz_data.initializeTimeZones();
 
   final dayBoundaryService = DayBoundaryService();
@@ -74,11 +82,20 @@ Future<void> main() async {
   );
 }
 
-/// Applies whichever `RESET_*` dart-defines were passed, before any normal
-/// routing logic runs. Each resource is cleared through the owning
-/// service's own `clear*` method — the same ones Settings' "Reset All
-/// Data" button uses — so this is just flag-reading glue, not a second
-/// copy of the reset logic.
+/// 전달된 `RESET_*` dart-define 플래그들을, 정상적인 라우팅 로직이
+/// 실행되기 전에 적용한다. 각 자원은 그것을 소유한 서비스 자신의
+/// `clear*` 메서드로 지워지며 — 이는 Settings 화면의 "Reset All Data"
+/// 버튼이 사용하는 메서드와 동일하다 — 따라서 이 함수는 초기화 로직을
+/// 다시 구현한 것이 아니라, 단지 플래그를 읽어 해당 메서드를 호출해
+/// 주는 접착 코드(glue)일 뿐이다.
+///
+/// [configService], [storageLocationService], [dayBoundaryService]는
+/// 각 서비스 인스턴스를 재구성하지 않고 재사용하기 위해 `main()`으로부터
+/// 전달받는다. 부작용으로 `_resetApp`/`_resetKey`/`_resetSession`/
+/// `_resetHistory` 값에 따라 API 키, config.json, 세션 상태, history,
+/// handoff 파일, 일일 진행도, TTS 캐시, 복습 이력/진행상태, 대화 이력을
+/// 실제로 삭제하고, 어떤 항목을 지우고 어떤 항목을 보존했는지
+/// `debugPrint`로 로그를 남긴다.
 Future<void> applyResetFlags({
   required ConfigService configService,
   required StorageLocationService storageLocationService,
@@ -161,9 +178,19 @@ Future<void> applyResetFlags({
   );
 }
 
+/// 앱의 루트 위젯. `routerProvider`(`go_router` 설정)와
+/// `themeModeProvider`(현재 테마 모드)를 watch해서, 그 값에 맞는
+/// `MaterialApp.router`를 구성한다. `main()`에서 `RestartWidget`과
+/// `ProviderScope`로 감싸져 `runApp`에 전달된다.
 class MyApp extends ConsumerWidget {
+  /// `MyApp`을 생성한다. `super.key`를 그대로 전달하는 것 외에 별도
+  /// 로직은 없다.
   const MyApp({super.key});
 
+  /// 현재 [router]와 [themeModeAsync](테마 모드 로딩 상태에 따라
+  /// data/loading/error)를 기반으로 위젯 트리를 만든다. 테마 로딩이
+  /// 끝나면 실제 `MaterialApp.router`를, 로딩 중에는 스피너를, 에러
+  /// 발생 시에는 에러 메시지를 보여주는 `MaterialApp`을 반환한다.
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);

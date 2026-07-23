@@ -7,29 +7,36 @@ import '../services/audio_playback_registry.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/audio_play_button.dart';
 
-/// Standalone "listen back to previously-learned sentences" screen, opened
-/// as a modal dialog (see `ListeningHistoryIconButton`) — entirely
-/// independent of ReviewScreen/DictionaryScreen. Loads its list once on
-/// open via [ListeningHistoryService] (no separate Riverpod
-/// StateNotifier/ViewModel needed for a one-shot read like this, matching
-/// DictionaryScreen/SettingsDialog's local-state approach); the screen
-/// behind this dialog stays mounted and untouched for as long as it's open.
+/// 독립적인 "예전에 학습했던 문장들을 다시 들어보기" 화면.
+/// `ListeningHistoryIconButton`에서 모달 다이얼로그로 열리며,
+/// ReviewScreen/DictionaryScreen과는 완전히 별개다. 열릴 때
+/// [ListeningHistoryService]로 목록을 한 번만 불러온다(이런 일회성 읽기에는
+/// 별도의 Riverpod StateNotifier/ViewModel이 필요 없다 — DictionaryScreen/
+/// SettingsDialog의 로컬 상태 방식과 같은 접근이다); 이 다이얼로그가 열려있는
+/// 동안 뒤쪽 화면은 계속 마운트된 채로 손대지 않고 남아있는다.
 class ListeningHistoryScreen extends ConsumerStatefulWidget {
   const ListeningHistoryScreen({super.key});
 
+  /// 이 위젯의 상태 객체([_ListeningHistoryScreenState])를 생성한다.
   @override
   ConsumerState<ListeningHistoryScreen> createState() => _ListeningHistoryScreenState();
 }
 
+/// [ListeningHistoryScreen]의 State. 리스닝 히스토리 목록을 담을
+/// `Future`를 로컬로 보관한다.
 class _ListeningHistoryScreenState extends ConsumerState<ListeningHistoryScreen> {
   late final Future<List<ReviewRecord>> _historyFuture;
 
+  /// 화면이 처음 마운트될 때 `listeningHistoryServiceProvider.buildHistory()`를
+  /// 한 번 호출해 [_historyFuture]에 담아둔다.
   @override
   void initState() {
     super.initState();
     _historyFuture = ref.read(listeningHistoryServiceProvider).buildHistory();
   }
 
+  /// [_historyFuture]를 `FutureBuilder`로 구독해 로딩/빈 목록/실제 목록에
+  /// 맞는 UI를 그린다.
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -72,11 +79,15 @@ class _ListeningHistoryScreenState extends ConsumerState<ListeningHistoryScreen>
   }
 }
 
+/// 리스닝 히스토리 목록의 한 행. 문장 텍스트와 함께, 캐시된 오디오만
+/// 재생하는 [AudioPlayButton]을 보여준다.
 class _ListeningHistoryRow extends ConsumerWidget {
   const _ListeningHistoryRow({required this.record});
 
+  /// 이 행이 표시할 리뷰 기록(문장/오디오 캐시 조회에 필요한 정보).
   final ReviewRecord record;
 
+  /// 문장 텍스트와 재생 버튼으로 이루어진 한 행을 그린다.
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Padding(

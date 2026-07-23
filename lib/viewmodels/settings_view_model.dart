@@ -8,15 +8,34 @@ import '../theme/app_theme.dart';
 import 'conversation_session_view_model.dart';
 import 'theme_mode_view_model.dart';
 
+/// [SettingsViewModel.save]의 결과. `validationFailed`는 입력값이 비어있는
+/// 등 저장 자체를 시도하지 못한 경우, `saved`는 학습 언어(target language)를
+/// 바꾸지 않고 저장이 끝난 경우, `savedWithRestart`는 학습 언어가 바뀌어
+/// 세션 데이터를 정리한 뒤 앱을 재시작해야 하는 경우다. SettingsDialog는 이
+/// 값에 따라 다이얼로그를 닫기만 할지, `RestartWidget.restartApp`까지
+/// 호출할지를 결정한다.
 enum SettingsSaveResult { validationFailed, saved, savedWithRestart }
 
+/// SettingsDialog가 watch하는 UI 상태.
 class SettingsState {
   const SettingsState({this.isSaving = false, this.errorMessage, this.infoMessage});
 
+  /// [SettingsViewModel.save]가 진행되는 동안 true가 되어, SettingsDialog의
+  /// Save 버튼을 비활성화하고 로딩 인디케이터를 보여주게 한다.
   final bool isSaving;
+
+  /// 저장 실패(입력값 검증 실패 등) 시 사용자에게 보여줄 에러 메시지.
   final String? errorMessage;
+
+  /// 에러는 아니지만 참고삼아 보여줄 안내 메시지. 예를 들어 언어 전환 시
+  /// handoff 요약 생성에 실패했지만 전환 자체는 계속 진행된다는 안내에
+  /// 쓰인다.
   final String? infoMessage;
 
+  /// [isSaving]/[errorMessage]/[infoMessage]를 갱신한 새 SettingsState를
+  /// 반환한다. `errorMessage`/`infoMessage`는 각각 [clearError]/[clearInfo]가
+  /// true일 때만 명시적으로 null이 되고, 그 외에는 새 값이 없으면 이전 값을
+  /// 유지한다.
   SettingsState copyWith({
     bool? isSaving,
     String? errorMessage,
@@ -32,10 +51,33 @@ class SettingsState {
   }
 }
 
+/// SettingsDialog(모든 화면의 Settings 아이콘 버튼에서 모달로 열림)를
+/// 지원하는 뷰모델. 모국어/학습 언어/테마 저장, 학습 언어 전환 시의 handoff
+/// 처리, 그리고 전체 데이터 초기화(resetAllData)를 담당한다.
 class SettingsViewModel extends Notifier<SettingsState> {
+  /// 초기 상태(저장 중 아님, 메시지 없음)를 생성한다. Riverpod이 이 provider가
+  /// 처음 watch/read될 때 자동으로 호출한다.
   @override
   SettingsState build() => const SettingsState();
 
+  /// SettingsDialog의 Save 버튼이 눌리면 호출된다. [nativeLanguage]/
+  /// [targetLanguage]/[themeMode]를 저장한다.
+  ///
+  /// 학습 언어([targetLanguage])가 기존 값과 다르지 않으면 언어/테마만 바로
+  /// 저장하고 [SettingsSaveResult.saved]를 반환한다.
+  ///
+  /// 학습 언어가 바뀌는 경우에는 먼저 이전 언어의 학습 세션을 정리한다:
+  /// 현재까지의 대화 기록([ConversationSessionViewModel.history])으로
+  /// `GeminiService.generateHandoffSummary`를 호출해 요약을 만들고
+  /// `handoffServiceProvider`에 저장해두었다가(실패해도 계속 진행하며
+  /// [SettingsState.infoMessage]로 안내), 대화 세션을 리셋하고, 진행 중이던
+  /// 학습/리뷰 세션 상태(session_state.json 등)를 지운 뒤 새 설정을 저장한다.
+  /// 이 경우 [SettingsSaveResult.savedWithRestart]를 반환하며,
+  /// SettingsDialog는 이를 받아 `RestartWidget.restartApp`으로 앱을
+  /// 재시작시킨다.
+  ///
+  /// 두 언어 중 하나라도 비어 있으면 아무 것도 저장하지 않고
+  /// [SettingsSaveResult.validationFailed]를 반환한다.
   Future<SettingsSaveResult> save({
     required String nativeLanguage,
     required String targetLanguage,
@@ -138,16 +180,17 @@ class SettingsViewModel extends Notifier<SettingsState> {
     return SettingsSaveResult.savedWithRestart;
   }
 
-  /// Wipes every piece of saved app state, for every language: the API
-  /// key, config.json, the in-progress session, all history files, all
-  /// per-language handoff files, the daily turn counter, every language's
-  /// TTS cache, review history, and conversation history, and any
-  /// in-progress review. The caller is responsible for restarting the app
-  /// afterward (via `RestartWidget`) so everything re-derives from scratch.
+  /// SettingsDialog의 "초기화(Hold to reset)" 버튼([HoldToResetButton])이
+  /// 눌리면 호출된다. 저장된 앱 상태를 언어 구분 없이 모조리 지운다: API 키,
+  /// config.json, 진행 중이던 세션, 모든 history 파일, 언어별 handoff 파일,
+  /// 일일 턴 카운터, 모든 언어의 TTS 캐시, 리뷰 히스토리, 대화 히스토리,
+  /// 진행 중이던 리뷰까지 전부 대상이다. 호출한 쪽(SettingsDialog)이 이후
+  /// `RestartWidget`으로 앱을 재시작시켜 모든 상태가 처음부터 다시
+  /// 계산되도록 해야 한다.
   ///
-  /// Distinct from a target-language switch (see [save]), which clears
-  /// only the current in-progress session/review and leaves every
-  /// language's cache/history/conversation data intact.
+  /// 학습 언어 전환([save] 참고)과는 다르다 — 전환은 현재 진행 중인
+  /// 세션/리뷰만 지우고 각 언어별 캐시/히스토리/대화 데이터는 그대로
+  /// 남겨두지만, 이 메서드는 모든 언어의 데이터를 완전히 지운다.
   Future<void> resetAllData() async {
     final sessionStateService = ref.read(sessionStateServiceProvider);
     await ref.read(apiKeyStorageServiceProvider).clearApiKey();
@@ -163,6 +206,9 @@ class SettingsViewModel extends Notifier<SettingsState> {
   }
 }
 
+/// [SettingsViewModel]/[SettingsState]를 노출하는 provider. SettingsDialog에서
+/// `ref.watch`(상태 렌더링)와 `ref.read(...notifier)`(save/resetAllData
+/// 호출)로 사용된다.
 final settingsViewModelProvider = NotifierProvider<SettingsViewModel, SettingsState>(
   SettingsViewModel.new,
 );

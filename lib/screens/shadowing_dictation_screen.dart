@@ -9,44 +9,68 @@ import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
 import '../widgets/end_session_button.dart';
 import '../widgets/feedback_box.dart';
+import '../widgets/reset_api_key_button.dart';
 import '../widgets/sentence_analysis_box.dart';
 
+/// Shadowing 학습 루프의 첫 단계 화면("문장 듣고 받아쓰기"). 라우트
+/// `/learning/shadowing/dictation`(`AppRoutes.shadowingDictation`)에
+/// 연결된다. [ShadowingViewModel]을 통해 문장을 불러와 TTS로 재생하고,
+/// 받아쓴 내용을 채점한다. 통과하면 "Continue to Pronunciation Practice"
+/// 버튼으로 [ShadowingPronunciationScreen](`/learning/shadowing/pronunciation`)으로
+/// 이동한다.
 class ShadowingDictationScreen extends ConsumerStatefulWidget {
   const ShadowingDictationScreen({super.key});
 
+  /// 이 위젯의 상태 객체([_ShadowingDictationScreenState])를 생성한다.
   @override
   ConsumerState<ShadowingDictationScreen> createState() => _ShadowingDictationScreenState();
 }
 
+/// [ShadowingDictationScreen]의 State. 받아쓰기 입력 텍스트필드 컨트롤러와,
+/// 재생 버튼을 처음부터 다시 자동재생시키기 위한 인스턴스 키를 로컬로
+/// 관리한다.
 class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScreen> {
   final _controller = TextEditingController();
 
-  /// Bumped on "Try Again" to force a fresh AudioPlayButton that autoplays
-  /// from the start.
+  /// "Try Again"을 누를 때마다 증가시켜, 처음부터 자동재생하는 새
+  /// AudioPlayButton을 강제로 다시 만들게 한다.
   int _audioInstanceKey = 0;
 
+  /// 화면이 처음 마운트될 때 [ShadowingViewModel.loadSentence]를 호출해
+  /// 문장을 불러오기 시작한다.
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(shadowingViewModelProvider.notifier).loadSentence());
   }
 
+  /// 위젯이 트리에서 제거될 때 [_controller]를 해제해 메모리 누수를 막는다.
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
+  /// Submit 버튼이 눌리면 호출된다. [ShadowingViewModel.submitDictation]으로
+  /// 현재 입력값을 채점 요청으로 보낸다.
   Future<void> _submit() {
     return ref.read(shadowingViewModelProvider.notifier).submitDictation(_controller.text);
   }
 
+  /// "Try Again" 버튼이 눌리면 호출된다. 입력값을 지우고
+  /// [ShadowingViewModel.resetDictationAttempt]로 시도를 초기화한 뒤,
+  /// [_audioInstanceKey]를 증가시켜 재생 버튼을 처음부터 다시 자동재생하게
+  /// 한다.
   void _retry() {
     _controller.clear();
     ref.read(shadowingViewModelProvider.notifier).resetDictationAttempt();
     setState(() => _audioInstanceKey++);
   }
 
+  /// "Continue to Pronunciation Practice" 버튼이 눌리면 호출된다. 세션의
+  /// 하위 단계를 두 번째 단계로 진행시킨 뒤(재시작 시 발음 연습 단계로
+  /// 재개할 수 있도록), `context.go('/learning/shadowing/pronunciation')`로
+  /// 이동한다.
   Future<void> _goToPronunciation() async {
     final sessionService = ref.read(sessionStateServiceProvider);
     final session = await sessionService.readState();
@@ -56,6 +80,9 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
     if (mounted) context.go('/learning/shadowing/pronunciation');
   }
 
+  /// [ShadowingViewModel]과 `dailyTurnCountProvider`를 watch해 받아쓰기
+  /// 화면 UI(로딩, 로드 에러+재시도, 또는 재생 버튼+입력+채점 결과+다음
+  /// 단계 버튼)를 그린다.
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(shadowingViewModelProvider);
@@ -96,6 +123,8 @@ class _ShadowingDictationScreenState extends ConsumerState<ShadowingDictationScr
                   onPressed: () => ref.read(shadowingViewModelProvider.notifier).loadSentence(),
                   child: const Text('Retry'),
                 ),
+                const SizedBox(height: 12),
+                const ResetApiKeyButton(),
               ],
             ),
           ),
