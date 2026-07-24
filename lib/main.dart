@@ -23,7 +23,8 @@ import 'widgets/restart_widget.dart';
 ///
 /// `RESET_APP=true`이면 모든 것을 지운다(API 키, config.json, 세션
 /// 상태, history, handoff 파일들, 일일 turn 카운터, TTS 캐시, 복습
-/// 이력, 진행 중이던 복습까지) — 아래 세 플래그를 합친 것과 동등하며,
+/// 이력, 진행 중이던 복습, 오늘 복습을 마쳤다는 표시까지) — 아래 세
+/// 플래그를 합친 것과 동등하며,
 /// 거기에 더해 config.json, handoff 파일, 일일 진행도, TTS 캐시, 복습
 /// 데이터까지 지운다(이 항목들은 각자의 개별 플래그가 없는데, native/
 /// target language를 지우는 부분 초기화나 일일 한도/캐시/복습 상태만
@@ -111,6 +112,7 @@ Future<void> applyResetFlags({
     'TTS cache (all languages)': _resetApp,
     'review history (all languages)': _resetApp,
     'review progress': _resetApp,
+    'reviewed-today flag': _resetApp,
     'conversation history (all languages)': _resetApp,
   };
 
@@ -162,6 +164,9 @@ Future<void> applyResetFlags({
   }
   if (targets['review progress']!) {
     await sessionStateService.clearReviewProgress();
+  }
+  if (targets['reviewed-today flag']!) {
+    await sessionStateService.clearReviewedTodayFlag();
   }
   if (targets['conversation history (all languages)']!) {
     await ConversationHistoryService(

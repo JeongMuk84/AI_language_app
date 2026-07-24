@@ -184,7 +184,8 @@ class SettingsViewModel extends Notifier<SettingsState> {
   /// 눌리면 호출된다. 저장된 앱 상태를 언어 구분 없이 모조리 지운다: API 키,
   /// config.json, 진행 중이던 세션, 모든 history 파일, 언어별 handoff 파일,
   /// 일일 턴 카운터, 모든 언어의 TTS 캐시, 리뷰 히스토리, 대화 히스토리,
-  /// 진행 중이던 리뷰까지 전부 대상이다. 호출한 쪽(SettingsDialog)이 이후
+  /// 진행 중이던 리뷰, 오늘 복습을 마쳤다는 표시까지 전부 대상이다.
+  /// 호출한 쪽(SettingsDialog)이 이후
   /// `RestartWidget`으로 앱을 재시작시켜 모든 상태가 처음부터 다시
   /// 계산되도록 해야 한다.
   ///
@@ -202,6 +203,7 @@ class SettingsViewModel extends Notifier<SettingsState> {
     await ref.read(ttsCacheServiceProvider).clearCache();
     await ref.read(reviewHistoryServiceProvider).clearHistory();
     await sessionStateService.clearReviewProgress();
+    await sessionStateService.clearReviewedTodayFlag();
     await ref.read(conversationHistoryServiceProvider).clearAllLanguages();
   }
 }

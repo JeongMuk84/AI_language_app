@@ -351,11 +351,16 @@ class ReviewViewModel extends Notifier<ReviewState> {
   /// ReviewScreen의 "Next Sentence" / "Finish Review & Start Learning"
   /// 버튼이 눌리면 호출된다. 현재 문항을 복습 완료로 표시한 뒤, 마지막
   /// 문항이 아니면 다음 문항으로 진행하고, 마지막 문항이면 리뷰 진행
-  /// 상태를 지우고 다음 학습 세션을 시작한다. 호출한 쪽(ReviewScreen)이
-  /// `context.go(route)`로 이동해야 할 라우트 문자열을 반환한다 — 계속
-  /// 진행 중이면 [AppRoutes.review], 마지막이었다면
-  /// [startNextLearningSession]이 결정한 다음 학습 화면(Writing 또는
-  /// Shadowing Dictation) 라우트다.
+  /// 상태를 지우고 [SessionStateService.markReviewedToday]로 "오늘 복습
+  /// 끝냄"을 표시한 뒤 다음 학습 세션을 시작한다 — 이 표시가 없으면, 오늘
+  /// 복습을 다 마친 뒤 새 학습에서 문장을 한 turn만 완료해도(그 문장이 TTS
+  /// 캐시까지 생겨 곧바로 "복습 가능"한 상태가 되므로) 세션이 재평가되는
+  /// 순간(예: 일일 turn 한도 도달, 앱 재시작) `_resolveLearningEntryRoute`가
+  /// 그 문장을 다시 복습 대상으로 오인해 복습 화면으로 돌려보내는 버그가
+  /// 있었다. 호출한 쪽(ReviewScreen)이 `context.go(route)`로 이동해야 할
+  /// 라우트 문자열을 반환한다 — 계속 진행 중이면 [AppRoutes.review],
+  /// 마지막이었다면 [startNextLearningSession]이 결정한 다음 학습 화면
+  /// (Writing 또는 Shadowing Dictation) 라우트다.
   Future<String> advance() async {
     final item = state.currentItem;
     if (item != null) {
@@ -365,6 +370,7 @@ class ReviewViewModel extends Notifier<ReviewState> {
     final sessionStateService = ref.read(sessionStateServiceProvider);
     if (state.isLastItem) {
       await sessionStateService.clearReviewProgress();
+      await sessionStateService.markReviewedToday();
       return startNextLearningSession(
         sessionStateService: sessionStateService,
         historyService: ref.read(historyServiceProvider),
@@ -391,12 +397,15 @@ class ReviewViewModel extends Notifier<ReviewState> {
 
   /// ReviewScreen의 "Skip Review & Start Learning" 버튼이 눌리면 호출된다.
   /// 이미 복습 완료로 표시된 문항들의 기록은 그대로 두고(되돌리지 않음),
-  /// 남은 문항들만 포기한 채 리뷰 진행 상태를 지우고 다음 학습 세션을
-  /// 시작한다. `advance()`와 마찬가지로 다음에 이동할 라우트 문자열을
-  /// 반환한다.
+  /// 남은 문항들만 포기한 채 리뷰 진행 상태를 지우고, `advance()`와
+  /// 마찬가지로 [SessionStateService.markReviewedToday]로 "오늘 복습 끝냄"을
+  /// 표시한 뒤 다음 학습 세션을 시작한다 — 건너뛴 것도 "오늘 복습을 다시
+  /// 보여줄 필요는 없음"으로 취급한다. `advance()`와 마찬가지로 다음에
+  /// 이동할 라우트 문자열을 반환한다.
   Future<String> skip() async {
     final sessionStateService = ref.read(sessionStateServiceProvider);
     await sessionStateService.clearReviewProgress();
+    await sessionStateService.markReviewedToday();
     return startNextLearningSession(
       sessionStateService: sessionStateService,
       historyService: ref.read(historyServiceProvider),

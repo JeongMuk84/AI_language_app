@@ -201,10 +201,14 @@ Future<String> startNextLearningSession({
 ///     `LearningSubStep` 참고). 날짜가 다르면 "학습 종료"를 눌렀을 때와
 ///     동일하게 세션을 finalize한 뒤 (B)로 넘어간다.
 /// (B) 진행 중인 세션이 없는 경우: 진행 중인 복습이 있으면(같은 Pacific
-///     달력 날짜) 그 복습을 재개한다. 없으면 `ReviewSessionService`로
-///     새 복습 세트를 직접 만든다 — 결과가 비어 있으면(복습할 것이
-///     전혀 없는 경우, 이력이 아예 없는 신규 학습자 포함) (C)로,
-///     아니면 그 세트를 저장하고 복습으로 이동한다.
+///     달력 날짜) 그 복습을 재개한다. 오늘 이미 복습을 마쳤거나
+///     건너뛴 적이 있으면(`SessionStateService.hasReviewedToday`) 그 즉시
+///     (C)로 넘어간다 — 그 사이 새로 학습한 문장이 TTS 캐시까지 생겨
+///     "복습 가능"해졌더라도 오늘 다시 복습으로 보내지 않기 위함이다.
+///     그렇지 않으면 `ReviewSessionService`로 새 복습 세트를 직접 만든다
+///     — 결과가 비어 있으면(복습할 것이 전혀 없는 경우, 이력이 아예 없는
+///     신규 학습자 포함) (C)로, 아니면 그 세트를 저장하고 복습으로
+///     이동한다.
 /// (C) 새 학습 세션을 시작한다(`startNextLearningSession` 참고).
 Future<String> _resolveLearningEntryRoute({
   required SessionStateService sessionStateService,
@@ -241,6 +245,22 @@ Future<String> _resolveLearningEntryRoute({
   final reviewProgress = await sessionStateService.readReviewProgress();
   if (reviewProgress != null) {
     return AppRoutes.review;
+  }
+
+  // 오늘 이미 복습을 끝냈거나 건너뛴 적이 있다면, `buildReviewSet()`이
+  // 무엇을 반환하든 곧바로 새 학습으로 넘어간다. `buildReviewSet()`은
+  // "복습 가능한 문장이 있는가"만 볼 뿐 "오늘 이미 복습을 했는가"는 전혀
+  // 모른다 — 그래서 이 검사가 없으면, 복습을 마친 뒤 새 학습에서 문장을
+  // 한 turn만 완료해도(그 문장이 TTS까지 캐시되어 곧바로 복습 가능
+  // 상태가 됨) 세션이 재평가되는 순간(예: 일일 turn 한도 도달, "학습
+  // 종료", 앱 재시작) 방금 학습한 그 문장이 "새로 복습 가능해진 항목"으로
+  // 잡혀 복습 화면으로 다시 보내지는 버그가 있었다.
+  final alreadyReviewedToday = await sessionStateService.hasReviewedToday();
+  if (alreadyReviewedToday) {
+    return startNextLearningSession(
+      sessionStateService: sessionStateService,
+      historyService: historyService,
+    );
   }
 
   // "복습할 것이 있는가"를 `historyService.hasAnyHistory()`(day-summary

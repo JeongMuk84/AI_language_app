@@ -62,6 +62,15 @@ class SessionStateService {
     return File('${dir.path}/review_progress.json');
   }
 
+  /// "오늘 이미 복습을 마쳤는지" 여부가 저장되는
+  /// `review_completed_today.json` 파일 핸들을 반환한다. [hasReviewedToday],
+  /// [markReviewedToday], [clearReviewedTodayFlag]가 내부적으로 사용하는
+  /// 헬퍼다.
+  Future<File> _reviewedTodayFile() async {
+    final dir = await _storageLocationService.baseDirectory();
+    return File('${dir.path}/review_completed_today.json');
+  }
+
   /// Returns null when there's no active session.
   /// (활성 세션이 없으면 null을 반환한다.)
   ///
@@ -349,6 +358,56 @@ class SessionStateService {
   /// 부작용: review_progress.json 파일이 있으면 삭제한다.
   Future<void> clearReviewProgress() async {
     final file = await _reviewProgressFile();
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
+  /// 오늘(태평양 달력 날짜 — `DayBoundaryService` 참고) 이미 복습을 마쳤거나
+  /// 건너뛴 적이 있는지 반환한다. 저장된 날짜가 오늘이 아니면(날짜가
+  /// 바뀌었으면) 자동으로 `false`를 반환한다 — `readDailyTurnCount`와 동일한
+  /// 방식이다.
+  ///
+  /// `app_router.dart`의 `_resolveLearningEntryRoute`가 "새로 복습 세트를
+  /// 만들어 복습 화면으로 보낼지" 판단하기 직전에 호출한다. 이 값이
+  /// `true`이면, `ReviewSessionService.buildReviewSet()`이 여전히 항목을
+  /// 반환하더라도(예: 오늘 새로 학습을 시작해 방금 완료한 문장이 TTS까지
+  /// 캐시되어 복습 가능 상태가 된 경우) 복습으로 보내지 않고 곧바로 다음
+  /// 학습으로 넘어가야 한다 — `buildReviewSet()` 자체는 "오늘 이미 복습을
+  /// 했는지"를 모르고 단순히 "복습 가능한 문장이 있는지"만 보기 때문이다.
+  /// 반환값: 오늘 이미 복습을 마쳤으면(또는 건너뛰었으면) `true`.
+  Future<bool> hasReviewedToday() async {
+    final file = await _reviewedTodayFile();
+    if (!await file.exists()) return false;
+    final content = await file.readAsString();
+    if (content.trim().isEmpty) return false;
+    final json = jsonDecode(content) as Map<String, dynamic>;
+    final date = DateTime.parse(json['date'] as String);
+    return _dayBoundaryService.isSamePacificDay(date, DateTime.now());
+  }
+
+  /// 오늘 복습을 마쳤다고(또는 건너뛰었다고) 표시한다.
+  ///
+  /// `ReviewViewModel`의 `advance()`(마지막 문항을 넘어갈 때)와 `skip()`이
+  /// 복습을 끝내고 다음 학습 세션으로 넘어가기 직전에 호출한다.
+  /// 부작용: review_completed_today.json에 오늘 날짜를 기록한다.
+  Future<void> markReviewedToday() async {
+    final file = await _reviewedTodayFile();
+    await file.writeAsString(jsonEncode({'date': DateTime.now().toIso8601String()}));
+  }
+
+  /// Deletes the "reviewed today" flag. Used by the `RESET_APP` dev/test
+  /// flag and Settings' "Reset All Data" — a stale flag left behind by
+  /// either would otherwise make `_resolveLearningEntryRoute` keep skipping
+  /// review even after every other piece of state has been wiped.
+  /// ("오늘 복습을 마쳤음" 플래그를 삭제한다. `main.dart`의 `RESET_APP`
+  /// 개발/테스트용 플래그와 Settings 화면의 "Reset All Data"
+  /// (`SettingsViewModel`)에서 사용된다 — 이 플래그가 낡은 채로 남아있으면,
+  /// 다른 모든 상태를 지웠는데도 `_resolveLearningEntryRoute`가 계속 복습을
+  /// 건너뛰게 된다.)
+  /// 부작용: review_completed_today.json 파일이 있으면 삭제한다.
+  Future<void> clearReviewedTodayFlag() async {
+    final file = await _reviewedTodayFile();
     if (await file.exists()) {
       await file.delete();
     }

@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
+import '../screens/rate_limited_screen.dart';
 import '../services/audio_playback_registry.dart';
+import '../services/gemini_service.dart';
 
 /// [audioLoader]로 지연 로딩되는 오디오 클립의 재생/일시정지 토글 버튼.
 /// ListeningHistoryScreen, ShadowingDictationScreen,
@@ -171,12 +173,20 @@ class _AudioPlayButtonState extends State<AudioPlayButton> {
           _audioBytes = bytes;
           _isLoading = false;
         });
-      } catch (_) {
+      } catch (e) {
         if (!mounted) return;
-        setState(() {
-          _isLoading = false;
-          _loadFailed = true;
-        });
+        setState(() => _isLoading = false);
+        if (e is GeminiApiException && e.reason == GeminiFailureReason.rateLimit) {
+          // 키가 사용량 한도(429)에 걸린 경우 — 버튼에 조용한 에러 아이콘만
+          // 남기는 대신, Retry + Reset API Key가 있는 화면으로 곧장
+          // 보내서 학습자가 새 키를 입력하고 계속할 수 있게 한다.
+          await Navigator.of(
+            context,
+            rootNavigator: true,
+          ).push(MaterialPageRoute(builder: (_) => const RateLimitedScreen()));
+          return;
+        }
+        setState(() => _loadFailed = true);
         return;
       }
     }
