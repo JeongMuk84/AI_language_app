@@ -21,16 +21,24 @@ import 'restart_widget.dart';
 /// 에러 톤(채워진 버튼이 아니라 아웃라인 버튼)으로 스타일링되어, "Retry"
 /// 같은 일상적인 액션보다는 한 단계 아래로 보이면서도 완전히 파괴적인
 /// 액션만큼의 경고감은 주지 않는다.
+///
+/// API 키 삭제·재시작에 더해, 오늘의 `dailyTurnCount`도 함께 풀어준다 —
+/// 새 프로젝트의 키는 새로운 TTS 할당량을 의미하므로, 로컬에 남아있는
+/// "오늘 몇 턴 했음" 카운트를 그대로 두면 새 키로도 곧바로 다시 한도에
+/// 걸린 것처럼 보일 수 있다. `reviewedToday`는 건드리지 않는다 — 복습은
+/// TTS 할당량과 무관하므로 그대로 유지한다.
 class ResetApiKeyButton extends ConsumerWidget {
   /// 파라미터 없이 위젯을 구성하는 생성자.
   const ResetApiKeyButton({super.key});
 
-  /// 저장된 API 키를 지우고 앱을 재시작한다. 부작용:
-  /// `apiKeyStorageServiceProvider`를 통해 키를 삭제하고,
-  /// [RestartWidget.restartApp]으로 전체 위젯 트리(및 모든 provider)를
-  /// 재생성한다.
+  /// 저장된 API 키를 지우고, 오늘의 학습 turn 카운터를 리셋한 뒤 앱을
+  /// 재시작한다. 부작용: `apiKeyStorageServiceProvider`를 통해 키를
+  /// 삭제하고, `sessionStateServiceProvider`를 통해 `daily_progress.json`을
+  /// 지우며, [RestartWidget.restartApp]으로 전체 위젯 트리(및 모든
+  /// provider)를 재생성한다.
   Future<void> _resetApiKey(BuildContext context, WidgetRef ref) async {
     await ref.read(apiKeyStorageServiceProvider).clearApiKey();
+    await ref.read(sessionStateServiceProvider).clearDailyProgress();
     if (!context.mounted) return;
     RestartWidget.restartApp(context);
   }

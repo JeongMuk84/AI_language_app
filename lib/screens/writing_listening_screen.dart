@@ -64,14 +64,15 @@ class _WritingListeningScreenState extends ConsumerState<WritingListeningScreen>
 
   /// "Continue" 버튼이 눌리면 호출된다.
   /// [WritingViewModel.completeTurnAndAdvanceToShadowing]으로 이번 턴을
-  /// 기록하고, 일일 턴 한도에 도달했으면(`limitReached`) `/learning`으로,
-  /// 아니면 `/learning/shadowing/dictation`으로 이동한다.
+  /// 기록하고, 반환된 라우트로 이동한다 — 보통 `/learning/shadowing/dictation`
+  /// 이지만, 이 턴으로 오늘 학습 한도에 도달했다면 대신 복습 화면으로
+  /// 이동한다.
   Future<void> _next() async {
-    final limitReached = await ref
+    final route = await ref
         .read(writingViewModelProvider.notifier)
         .completeTurnAndAdvanceToShadowing();
     if (!mounted) return;
-    context.go(limitReached ? '/learning' : '/learning/shadowing/dictation');
+    context.go(route);
   }
 
   /// [WritingViewModel]과 `dailyTurnCountProvider`를 watch해 듣기/발음 연습

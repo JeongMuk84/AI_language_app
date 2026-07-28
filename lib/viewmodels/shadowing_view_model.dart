@@ -8,6 +8,7 @@ import '../models/dictation_result.dart';
 import '../models/exercise_type.dart';
 import '../models/pronunciation_result.dart';
 import '../providers/service_providers.dart';
+import '../router/app_router.dart';
 import '../services/gemini_service.dart';
 import '../utils/id_utils.dart';
 import 'sentence_hidden_toggle_mixin.dart';
@@ -255,12 +256,15 @@ class ShadowingViewModel extends Notifier<ShadowingState>
   /// Writing" 버튼이 눌리면 호출된다. 이번 shadowing 턴을 기록하고 현재
   /// 진행 중인 exercise 타입을 writing으로 전환한다.
   ///
-  /// 이 턴에서 방금 [kDailyTurnLimit]에 도달했다면 true를 반환한다 — 이
-  /// 경우 세션이 "학습 종료"와 똑같은 방식으로 이미 여기서 자동
-  /// 마무리(finalize)되었으므로, 호출한 쪽(ShadowingPronunciationScreen)은
-  /// 다음 exercise로 계속 진행하는 대신 진입 라우팅 화면(`/learning`)으로
-  /// 돌아가야 한다.
-  Future<bool> completeTurnAndAdvanceToWriting() async {
+  /// 호출한 쪽(ShadowingPronunciationScreen)이 `context.go(route)`로 이동해야
+  /// 할 라우트 문자열을 반환한다 — 보통은 [AppRoutes.writing]이지만, 이
+  /// 턴으로 방금 [kDailyTurnLimit]에 도달했다면 세션을 "학습 종료"와
+  /// 똑같은 방식으로 자동 finalize한 뒤, 11번째 문장을 생성하려 시도하는
+  /// 대신 곧바로 [AppRoutes.review]를 반환한다 — `/learning`을 거치지
+  /// 않으므로 라우터의 일반 진입 분기(오늘 이미 복습을 마쳤으면 그냥 다음
+  /// 학습을 또 시작하는 로직)를 타지 않고, 결과적으로 하루 한도가 걸리지
+  /// 않고 계속 새 세션이 반복되던 버그를 막는다.
+  Future<String> completeTurnAndAdvanceToWriting() async {
     final sessionService = ref.read(sessionStateServiceProvider);
     var session = await sessionService.readState();
     session ??= await sessionService.startNewSession(initialType: ExerciseType.shadowing);
@@ -296,9 +300,9 @@ class ShadowingViewModel extends Notifier<ShadowingState>
     ref.invalidate(dailyTurnCountProvider);
     if (newCount >= kDailyTurnLimit) {
       await ref.read(historyServiceProvider).finalizeSession();
-      return true;
+      return AppRoutes.review;
     }
-    return false;
+    return AppRoutes.writing;
   }
 
   /// 예외 [e]를 사용자에게 보여줄 메시지 문자열로 변환한다. `GeminiApiException`이면

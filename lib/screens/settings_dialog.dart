@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../models/app_config.dart';
+import '../services/trial_gate_service.dart';
 import '../theme/app_theme.dart';
 import '../viewmodels/settings_view_model.dart';
 import '../widgets/hold_to_reset_button.dart';
@@ -174,6 +175,16 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
             Text('Created by JeongMuk84', style: Theme.of(context).textTheme.labelSmall),
             const SizedBox(height: 2),
             Text(_versionLabel(), style: Theme.of(context).textTheme.labelSmall),
+            // 일반 버전에서는 TrialGateService.isTrialMode가 항상 false라
+            // 아무것도 표시되지 않는다 — 평가판(trial) 빌드에서만, 빌드에
+            // 박힌 만료일을 그대로 보여준다.
+            if (TrialGateService.isTrialMode) ...[
+              const SizedBox(height: 2),
+              Text(
+                'Trial version — expires ${TrialGateService.trialExpiryRaw}',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ],
           ],
         ),
       ),

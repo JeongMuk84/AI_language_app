@@ -185,9 +185,8 @@ class SettingsViewModel extends Notifier<SettingsState> {
   /// config.json, 진행 중이던 세션, 모든 history 파일, 언어별 handoff 파일,
   /// 일일 턴 카운터, 모든 언어의 TTS 캐시, 리뷰 히스토리, 대화 히스토리,
   /// 진행 중이던 리뷰, 오늘 복습을 마쳤다는 표시까지 전부 대상이다.
-  /// 호출한 쪽(SettingsDialog)이 이후
-  /// `RestartWidget`으로 앱을 재시작시켜 모든 상태가 처음부터 다시
-  /// 계산되도록 해야 한다.
+  /// 호출한 쪽(SettingsDialog)이 이후 `RestartWidget`으로 앱을
+  /// 재시작시켜 모든 상태가 처음부터 다시 계산되도록 해야 한다.
   ///
   /// 학습 언어 전환([save] 참고)과는 다르다 — 전환은 현재 진행 중인
   /// 세션/리뷰만 지우고 각 언어별 캐시/히스토리/대화 데이터는 그대로

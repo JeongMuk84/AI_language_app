@@ -11,6 +11,7 @@ import '../models/translation_result.dart';
 import '../providers/service_providers.dart';
 import '../router/app_router.dart';
 import '../services/gemini_service.dart';
+import '../services/session_state_service.dart';
 
 /// ReviewScreen이 watch하는 UI 상태. 스페이스드 리뷰(spaced review) 세트,
 /// 현재 몇 번째 문항을 보고 있는지, 번역 제출/채점 진행 상태, 발음 분석
@@ -352,16 +353,19 @@ class ReviewViewModel extends Notifier<ReviewState> {
   /// 버튼이 눌리면 호출된다. 현재 문항을 복습 완료로 표시한 뒤, 마지막
   /// 문항이 아니면 다음 문항으로 진행하고, 마지막 문항이면 리뷰 진행
   /// 상태를 지우고 [SessionStateService.markReviewedToday]로 "오늘 복습
-  /// 끝냄"을 표시한 뒤 다음 학습 세션을 시작한다 — 이 표시가 없으면, 오늘
-  /// 복습을 다 마친 뒤 새 학습에서 문장을 한 turn만 완료해도(그 문장이 TTS
-  /// 캐시까지 생겨 곧바로 "복습 가능"한 상태가 되므로) 세션이 재평가되는
-  /// 순간(예: 일일 turn 한도 도달, 앱 재시작) `_resolveLearningEntryRoute`가
-  /// 그 문장을 다시 복습 대상으로 오인해 복습 화면으로 돌려보내는 버그가
-  /// 있었다. 호출한 쪽(ReviewScreen)이 `context.go(route)`로 이동해야 할
-  /// 라우트 문자열을 반환한다 — 계속 진행 중이면 [AppRoutes.review],
-  /// 마지막이었다면 [startNextLearningSession]이 결정한 다음 학습 화면
-  /// (Writing 또는 Shadowing Dictation) 라우트다.
-  Future<String> advance() async {
+  /// 끝냄"을 표시한 뒤 [_startNextLearningOrNull]로 다음 학습을 시도한다 —
+  /// 이 표시가 없으면, 오늘 복습을 다 마친 뒤 새 학습에서 문장을 한
+  /// turn만 완료해도(그 문장이 TTS 캐시까지 생겨 곧바로 "복습 가능"한
+  /// 상태가 되므로) 세션이 재평가되는 순간(예: 앱 재시작)
+  /// `_resolveLearningEntryRoute`가 그 문장을 다시 복습 대상으로 오인해
+  /// 복습 화면으로 돌려보내는 버그가 있었다. 호출한 쪽(ReviewScreen)이
+  /// 이동해야 할 라우트 문자열을 반환한다 — 계속 진행 중이면
+  /// [AppRoutes.review], 마지막이면서 오늘 학습 한도 전이라면
+  /// [startNextLearningSession]이 결정한 다음 학습 화면(Writing 또는
+  /// Shadowing Dictation) 라우트, 마지막인데 오늘 학습 한도(`kDailyTurnLimit`)에
+  /// 이미 도달했다면 `null` — 이 경우 호출한 쪽이 새 학습을 시도하는 대신
+  /// `RateLimitedScreen`(Retry / Reset API Key)을 직접 띄워야 한다.
+  Future<String?> advance() async {
     final item = state.currentItem;
     if (item != null) {
       await ref.read(reviewHistoryServiceProvider).markReviewed(item.sentenceInTarget);
@@ -371,10 +375,7 @@ class ReviewViewModel extends Notifier<ReviewState> {
     if (state.isLastItem) {
       await sessionStateService.clearReviewProgress();
       await sessionStateService.markReviewedToday();
-      return startNextLearningSession(
-        sessionStateService: sessionStateService,
-        historyService: ref.read(historyServiceProvider),
-      );
+      return _startNextLearningOrNull(sessionStateService);
     }
 
     final nextIndex = state.currentIndex + 1;
@@ -399,13 +400,26 @@ class ReviewViewModel extends Notifier<ReviewState> {
   /// 이미 복습 완료로 표시된 문항들의 기록은 그대로 두고(되돌리지 않음),
   /// 남은 문항들만 포기한 채 리뷰 진행 상태를 지우고, `advance()`와
   /// 마찬가지로 [SessionStateService.markReviewedToday]로 "오늘 복습 끝냄"을
-  /// 표시한 뒤 다음 학습 세션을 시작한다 — 건너뛴 것도 "오늘 복습을 다시
-  /// 보여줄 필요는 없음"으로 취급한다. `advance()`와 마찬가지로 다음에
-  /// 이동할 라우트 문자열을 반환한다.
-  Future<String> skip() async {
+  /// 표시한 뒤 [_startNextLearningOrNull]로 다음 학습을 시도한다 —
+  /// 건너뛴 것도 "오늘 복습을 다시 보여줄 필요는 없음"으로 취급한다.
+  /// `advance()`와 마찬가지로 다음 라우트 문자열(또는 오늘 학습 한도에
+  /// 이미 도달했다면 `null`)을 반환한다.
+  Future<String?> skip() async {
     final sessionStateService = ref.read(sessionStateServiceProvider);
     await sessionStateService.clearReviewProgress();
     await sessionStateService.markReviewedToday();
+    return _startNextLearningOrNull(sessionStateService);
+  }
+
+  /// 오늘의 `dailyTurnCount`가 [kDailyTurnLimit]에 아직 도달하지 않았으면
+  /// [startNextLearningSession]으로 새 학습 세션을 시작해 그 라우트를
+  /// 반환하고, 이미 도달했으면 새 학습을 시도하지 않고(TTS 호출이 있는
+  /// 학습 화면까지 갔다가 429로 실패하는 것을 기다릴 필요 없이, 로컬에
+  /// 이미 있는 카운트로 미리 판단한다) `null`을 반환한다. `advance()`와
+  /// `skip()`이 복습을 마치고 다음 학습으로 넘어가기 직전에 호출한다.
+  Future<String?> _startNextLearningOrNull(SessionStateService sessionStateService) async {
+    final dailyTurnCount = await sessionStateService.readDailyTurnCount();
+    if (dailyTurnCount >= kDailyTurnLimit) return null;
     return startNextLearningSession(
       sessionStateService: sessionStateService,
       historyService: ref.read(historyServiceProvider),

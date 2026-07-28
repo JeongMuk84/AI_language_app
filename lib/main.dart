@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 
 import 'router/app_router.dart';
+import 'screens/trial_expired_screen.dart';
 import 'services/api_key_storage_service.dart';
 import 'services/config_service.dart';
 import 'services/conversation_history_service.dart';
@@ -12,6 +13,7 @@ import 'services/history_service.dart';
 import 'services/review_history_service.dart';
 import 'services/session_state_service.dart';
 import 'services/storage_location_service.dart';
+import 'services/trial_gate_service.dart';
 import 'services/tts_cache_service.dart';
 import 'theme/app_theme.dart';
 import 'viewmodels/theme_mode_view_model.dart';
@@ -41,15 +43,35 @@ const _resetSession = bool.fromEnvironment('RESET_SESSION');
 /// 저장된 history 파일만 지운다.
 const _resetHistory = bool.fromEnvironment('RESET_HISTORY');
 
-/// 앱의 진입점(entry point). Flutter 바인딩과 timezone 데이터베이스를
-/// 초기화하고, 저장 위치/설정 서비스를 준비한 뒤 마이그레이션을
-/// 수행하고, dev/test용 `RESET_*` 플래그를 적용한 다음 위젯 트리를
-/// 띄운다. 각 단계가 이 순서로 실행되어야 하는 이유는 아래 각 줄의
-/// 주석 참고(예: timezone 초기화는 `DayBoundaryService`가 Pacific
-/// 날짜를 계산하기 전에 끝나야 하고, storage/config 마이그레이션은
-/// reset 플래그 적용이나 라우팅보다 먼저 끝나야 한다).
+/// 앱의 진입점(entry point). Flutter 바인딩을 초기화한 직후, 다른 무엇보다
+/// 먼저 `TrialGateService.isExpired()`를 확인한다 — 평가판(trial) 빌드가
+/// 만료됐다면 `TrialExpiredScreen` 하나만 담은 최소한의 `MaterialApp`을
+/// 곧바로 띄우고 그대로 반환하며, timezone 초기화나 storage 마이그레이션,
+/// `RESET_*` 플래그 적용, `ProviderScope`/`GoRouter` 구성 등 그 아래의
+/// 모든 것을 건너뛴다. `TRIAL_MODE`/`TRIAL_EXPIRY`는 빌드에 박힌
+/// 컴파일 타임 상수이므로, config.json이나 secure storage를 초기화해도(
+/// Settings의 "Reset All Data" 포함) 이 판정 자체는 절대 우회되지 않는다.
+///
+/// 만료되지 않았다면(또는 평가판 빌드가 아니라면) 기존과 동일하게 timezone
+/// 데이터베이스를 초기화하고, 저장 위치/설정 서비스를 준비한 뒤
+/// 마이그레이션을 수행하고, dev/test용 `RESET_*` 플래그를 적용한 다음
+/// 위젯 트리를 띄운다. 각 단계가 이 순서로 실행되어야 하는 이유는 아래 각
+/// 줄의 주석 참고(예: timezone 초기화는 `DayBoundaryService`가 Pacific
+/// 날짜를 계산하기 전에 끝나야 하고, storage/config 마이그레이션은 reset
+/// 플래그 적용이나 라우팅보다 먼저 끝나야 한다).
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (TrialGateService().isExpired()) {
+    runApp(
+      const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: TrialExpiredScreen(),
+      ),
+    );
+    return;
+  }
+
   // IANA 시간대 데이터베이스를 로드해 DayBoundaryService가
   // "America/Los_Angeles"를 (DST를 반영해) 해석할 수 있게 한다 — 어떤
   // 코드든 day boundary를 읽기 전에 반드시 먼저 실행돼야 한다.

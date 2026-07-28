@@ -12,13 +12,17 @@ import '../widgets/audio_play_button.dart';
 import '../widgets/audio_recorder_widget.dart';
 import '../widgets/feedback_box.dart';
 import '../widgets/reset_api_key_button.dart';
+import 'rate_limited_screen.dart';
 
 /// 스페이스드 리뷰(spaced review) 화면. 라우트 `/learning/review`
-/// (`AppRoutes.review`)에 연결된다. AppRouter의 redirect 로직은 온보딩이
-/// 끝난 뒤 진행 중이던 리뷰가 있거나 새로 만든 리뷰 세트가 비어있지 않을 때
-/// 이 화면으로 보내며, ReviewViewModel(`advance`/`skip`)이 반환하는 라우트를
-/// 통해 다음 학습 화면(Writing 또는 Shadowing Dictation)으로 이어진다.
-/// [ReviewViewModel]을 통해 문항별 번역 제출/채점과 발음 분석을 처리한다.
+/// (`AppRoutes.review`)에 연결된다. `AppRouter`의 redirect 로직뿐 아니라,
+/// 학습 화면들의 "다음으로 넘어가기"(오늘 학습 한도 도달 시)와
+/// `EndSessionButton`(학습 종료 시)도 항상 이 화면으로 곧장 이동한다.
+/// `ReviewViewModel`(`advance`/`skip`)이 반환하는 라우트를 통해 다음 학습
+/// 화면(Writing 또는 Shadowing Dictation)으로 이어지거나, 오늘 학습
+/// `dailyTurnCount` 한도에 이미 도달한 상태라면 대신 [RateLimitedScreen]
+/// (Retry / Reset API Key)이 뜬다. [ReviewViewModel]을 통해 문항별 번역
+/// 제출/채점과 발음 분석을 처리한다.
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key});
 
@@ -63,18 +67,37 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
 
   /// "Next Sentence" / "Finish Review & Start Learning" 버튼이 눌리면
   /// 호출된다. [ReviewViewModel.advance]를 호출해 다음 문항으로 넘어가거나
-  /// 리뷰를 끝내고, 반환된 라우트로 `context.go`한다.
+  /// 리뷰를 끝내고, [_goToRouteOrRateLimited]로 그 결과를 처리한다.
   Future<void> _advance() async {
     final route = await ref.read(reviewViewModelProvider.notifier).advance();
-    if (mounted) context.go(route);
+    if (mounted) await _goToRouteOrRateLimited(route);
   }
 
   /// "Skip Review & Start Learning" 버튼이 눌리면 호출된다.
-  /// [ReviewViewModel.skip]을 호출해 남은 리뷰를 포기하고, 반환된 라우트로
-  /// `context.go`한다.
+  /// [ReviewViewModel.skip]을 호출해 남은 리뷰를 포기하고,
+  /// [_goToRouteOrRateLimited]로 그 결과를 처리한다.
   Future<void> _skip() async {
     final route = await ref.read(reviewViewModelProvider.notifier).skip();
-    if (mounted) context.go(route);
+    if (mounted) await _goToRouteOrRateLimited(route);
+  }
+
+  /// [ReviewViewModel.advance]/[ReviewViewModel.skip]이 반환한 [route]를
+  /// 처리한다 — 라우트 문자열이 있으면 `context.go`로 그곳으로 이동하고,
+  /// `null`이면(오늘 학습 `dailyTurnCount` 한도에 이미 도달해 새 학습을
+  /// 시도하지 않기로 한 경우) go_router route로 등록되어 있지 않은
+  /// [RateLimitedScreen]을 `Navigator`로 직접 push한다 — `AudioPlayButton`이
+  /// 429를 만났을 때와 동일한 방식이다. "Retry"를 누르면 이 화면을 pop해
+  /// ReviewScreen으로 돌아오고, "Reset API Key"를 누르면 키 삭제 +
+  /// `dailyTurnCount` 리셋 + 앱 재시작으로 이어진다.
+  Future<void> _goToRouteOrRateLimited(String? route) async {
+    if (route == null) {
+      await Navigator.of(
+        context,
+        rootNavigator: true,
+      ).push(MaterialPageRoute(builder: (_) => const RateLimitedScreen()));
+      return;
+    }
+    context.go(route);
   }
 
   /// [ReviewViewModel]을 watch해 리뷰 화면 UI를 그린다: 로딩/로드 에러/빈
