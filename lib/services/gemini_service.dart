@@ -12,7 +12,9 @@ import '../models/dictation_result.dart';
 import '../models/exercise_type.dart';
 import '../models/learning_session_snapshot.dart';
 import '../models/level_test_question.dart';
+import '../models/pregenerated_sentence.dart';
 import '../models/pronunciation_result.dart';
+import '../models/sentence_queue.dart';
 import '../models/translation_result.dart';
 import '../models/word_lookup_result.dart';
 import '../utils/wav_utils.dart';
@@ -458,6 +460,183 @@ quotes, no labels, no markdown.
         // 아래의 로그는 같은 turn이라면 항상 동일한 문자열을 보여줘야 한다.)
         _log('sentence generated for this turn -> "$trimmed"');
         return trimmed;
+      },
+    );
+  }
+
+  /// CEFR 레벨별로 문장 길이(단어 수)·문법 복잡도 목표치와 그 수준을
+  /// 보여주는 구조 예시 문장을 만들어, [generateDailySentenceSet] 프롬프트에
+  /// 그대로 삽입할 문자열로 반환한다. `evaluateLevelTest`가 반환해
+  /// `config.difficultyLevel`에 저장되는 것과 동일한 CEFR 토큰 체계(A1~C2)를
+  /// 쓰므로 두 체계가 어긋날 일이 없다 — 인식하지 못하는 값(레벨 테스트를
+  /// 아직 거치지 않은 등)은 중급(B1) 기준으로 취급한다.
+  ///
+  /// 이전에는 [generateNextSentence]가 `difficultyLevel`을 프롬프트에 전혀
+  /// 반영하지 않아, 문장 길이가 사실상 무작위로 짧거나 길게 나오는 원인이
+  /// 됐다 — 이 헬퍼가 그 공백을 메운다.
+  /// [level]: `config.difficultyLevel`에 저장된 CEFR 토큰(또는 `null`).
+  /// 반환값: 프롬프트에 삽입할 길이/복잡도 가이드 + 예시 문장 문자열.
+  String _lengthGuidanceFor(String? level) {
+    const guidance = {
+      'A1': (
+        words: '4-7',
+        complexity: 'a single simple clause, present tense, everyday vocabulary only',
+        example: '"I drink coffee every morning."',
+      ),
+      'A2': (
+        words: '6-10',
+        complexity:
+            'one simple clause, may use past or future tense, at most one connector (and/but/because)',
+        example: '"I went to the market yesterday because we needed food."',
+      ),
+      'B1': (
+        words: '9-14',
+        complexity: 'a main clause plus one subordinate clause (when/if/because/that), varied tenses',
+        example: '"When I got home, I realized I had forgotten my keys at the office."',
+      ),
+      'B2': (
+        words: '12-18',
+        complexity: 'multiple clauses, relative clauses, connectors like although/despite/in order to',
+        example:
+            '"Although the weather was terrible, we decided to go hiking anyway, since it '
+            'was our only free weekend."',
+      ),
+      'C1': (
+        words: '15-22',
+        complexity:
+            'multiple subordinate or relative clauses, sophisticated connectors, less common vocabulary',
+        example:
+            '"Despite having reviewed the proposal thoroughly, the committee remained '
+            'unconvinced that the plan would achieve what it promised."',
+      ),
+      'C2': (
+        words: '18-25',
+        complexity: 'complex nested clauses, idiomatic and nuanced expressions, near-native phrasing',
+        example:
+            '"Had it not been for the last-minute intervention of a former colleague, the '
+            'entire negotiation would almost certainly have collapsed."',
+      ),
+    };
+    final g = guidance[level] ?? guidance['B1']!;
+    return '''
+Target length: approximately ${g.words} words per sentence.
+Target grammatical complexity: ${g.complexity}.
+Structural example at this level (shows length/complexity only - write your
+actual sentences in the correct languages specified above, not English,
+unless English happens to be one of them): ${g.example}
+''';
+  }
+
+  /// Generates the FULL day's practice set (5 shadowing + 5 writing
+  /// sentences, [kDailyTurnLimit] total) in a single call, instead of
+  /// [generateNextSentence] being called once per turn. Topic detection and
+  /// sentence generation happen in this same call (no separate
+  /// classification request): if [topicInput] is empty or judged
+  /// meaningless (gibberish, random symbols), Gemini silently invents a
+  /// random topic (considering [history] to avoid repeating it) instead;
+  /// otherwise it builds the set around the given topic. All 10 sentences
+  /// form one connected conversation, alternating shadowing/writing in
+  /// order, with length/complexity calibrated to [difficultyLevel] via
+  /// [_lengthGuidanceFor] so a set doesn't mix very short and very long
+  /// sentences at random.
+  /// (하루치 학습 세트(쉐도잉 5 + 작문 5, 총 [kDailyTurnLimit]개)를
+  /// [generateNextSentence]처럼 turn마다 한 번씩이 아니라 단 한 번의 호출로
+  /// 모두 생성한다. 주제 판별과 문장 생성을 같은 호출 안에서 함께 처리한다
+  /// (별도 판별 요청 없음): [topicInput]이 비어 있거나 무의미(횡설수설,
+  /// 무작위 기호)하다고 판단되면 Gemini가 조용히 무작위 주제를 지어내고
+  /// ([history]를 고려해 반복을 피함), 그렇지 않으면 주어진 주제로 세트를
+  /// 구성한다. 10문장 전체가 하나의 이어지는 대화를 이루도록 shadowing/
+  /// writing을 순서대로 번갈아 배치하며, 길이/복잡도는 [_lengthGuidanceFor]를
+  /// 통해 [difficultyLevel]에 맞춰 보정되어, 한 세트 안에서 아주 짧은
+  /// 문장과 아주 긴 문장이 무작위로 섞이지 않게 한다.)
+  ///
+  /// `TopicInputDialog`가 "Start" 버튼이 눌렸을 때 호출하며, 결과를
+  /// `SessionStateService.writeSentenceQueue`로 저장해 각 turn이 순서대로
+  /// 꺼내 쓴다.
+  /// [topicInput]: 학습자가 입력한 주제. 비어 있으면 무작위 주제로 처리.
+  /// [history]: 대화 흐름 연속성을 위한 최근 학습 이력(전체 중 마지막
+  /// [kHistoryContextWindow]개만 프롬프트에 사용).
+  /// [difficultyLevel]: `config.difficultyLevel`에 저장된 CEFR 토큰. `null`이면
+  /// B1 기준으로 취급.
+  /// 반환값: 오늘 순서대로 꺼내 쓸 10개 문장을 담은 [SentenceQueue].
+  /// 부작용: Gemini API에 네트워크 요청을 보내고, 생성된 세트 요약을 디버그
+  /// 로그로 남긴다.
+  Future<SentenceQueue> generateDailySentenceSet({
+    String? topicInput,
+    required List<ConversationTurn> history,
+    required String? difficultyLevel,
+  }) async {
+    final apiKey = await _requireApiKey();
+    final config = await _configService.readConfig();
+    final nativeLanguage = config.nativeLanguage ?? 'the native language';
+    final targetLanguage = config.targetLanguage ?? 'the target language';
+
+    final recentHistory = history.length > kHistoryContextWindow
+        ? history.sublist(history.length - kHistoryContextWindow)
+        : history;
+    final historyText = recentHistory.isEmpty
+        ? '(no prior history - this learner is starting fresh)'
+        : recentHistory
+              .map((t) {
+                final shown = t.type == ExerciseType.shadowing
+                    ? t.sentenceInTarget
+                    : t.sentenceInNative;
+                return '(${t.type.value}) ${shown ?? ''}';
+              })
+              .join('\n');
+
+    final trimmedTopic = topicInput?.trim() ?? '';
+    final topicSection = trimmedTopic.isEmpty
+        ? 'The learner did not suggest a topic.'
+        : 'The learner suggested this topic: "$trimmedTopic"';
+
+    final lengthGuidance = _lengthGuidanceFor(difficultyLevel);
+
+    return _dedupe(
+      'generateDailySentenceSet:$trimmedTopic:${difficultyLevel ?? 'B1'}:${recentHistory.length}',
+      () async {
+        final prompt = '''
+Planning today's practice set for a learner studying $targetLanguage
+(native: $nativeLanguage). Recent history, for context/continuity only:
+$historyText
+
+$topicSection
+First, decide whether the suggested topic (if any) is a real, meaningful
+conversation topic - not empty, not gibberish, not a random string of
+characters or symbols. If there is no topic or it is not meaningful, silently
+invent a fresh, natural conversation topic yourself (avoid repeating recent
+history above); do not mention that you did this anywhere in the output. If
+it is meaningful, use it as the topic for the whole set.
+
+Write exactly 10 sentences forming ONE natural, connected conversation on
+that topic, alternating exercise type in this exact order: items 1, 3, 5, 7,
+9 are for a dictation exercise (learner listens, then writes what they
+heard) and MUST be written ENTIRELY in $targetLanguage; items 2, 4, 6, 8, 10
+are for a writing exercise (learner translates it into $targetLanguage) and
+MUST be written ENTIRELY in $nativeLanguage. Never translate/gloss a
+sentence into the other language or mix languages within one sentence.
+
+$lengthGuidance
+Keep length and grammatical complexity consistent across all 10 sentences at
+this level - natural variation (a short greeting, a slightly longer
+explanation) is fine, but avoid extreme swings between very short and very
+long sentences within the set.
+
+Return ONLY raw JSON, no markdown fences:
+{"sentences":[{"type":"shadowing|writing","text":"..."}]}
+''';
+        final text = await _generateText(apiKey, prompt, label: 'generateDailySentenceSet');
+        final decoded = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
+        final items = decoded['sentences'] as List;
+        final sentences = items
+            .map((e) => PregeneratedSentence.fromJson(e as Map<String, dynamic>))
+            .toList();
+        _log(
+          'generateDailySentenceSet: ${sentences.length} sentences generated '
+          '(topic=${trimmedTopic.isEmpty ? 'random' : trimmedTopic}, '
+          'level=${difficultyLevel ?? 'B1'}, words=${sentences.map((s) => s.text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length).toList()})',
+        );
+        return SentenceQueue(generatedAt: DateTime.now(), sentences: sentences);
       },
     );
   }

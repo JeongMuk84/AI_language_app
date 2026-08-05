@@ -361,9 +361,10 @@ class ReviewViewModel extends Notifier<ReviewState> {
   /// 복습 화면으로 돌려보내는 버그가 있었다. 호출한 쪽(ReviewScreen)이
   /// 이동해야 할 라우트 문자열을 반환한다 — 계속 진행 중이면
   /// [AppRoutes.review], 마지막이면서 오늘 학습 한도 전이라면
-  /// [startNextLearningSession]이 결정한 다음 학습 화면(Writing 또는
-  /// Shadowing Dictation) 라우트, 마지막인데 오늘 학습 한도(`kDailyTurnLimit`)에
-  /// 이미 도달했다면 `null` — 이 경우 호출한 쪽이 새 학습을 시도하는 대신
+  /// [AppRoutes.learning](호출한 쪽이 이 값을 보면 `context.go` 대신
+  /// `startNextLearningInteractive`를 호출해야 한다 — [_startNextLearningOrNull]
+  /// 참고), 마지막인데 오늘 학습 한도(`kDailyTurnLimit`)에 이미 도달했다면
+  /// `null` — 이 경우 호출한 쪽이 새 학습을 시도하는 대신
   /// `RateLimitedScreen`(Retry / Reset API Key)을 직접 띄워야 한다.
   Future<String?> advance() async {
     final item = state.currentItem;
@@ -412,18 +413,21 @@ class ReviewViewModel extends Notifier<ReviewState> {
   }
 
   /// 오늘의 `dailyTurnCount`가 [kDailyTurnLimit]에 아직 도달하지 않았으면
-  /// [startNextLearningSession]으로 새 학습 세션을 시작해 그 라우트를
-  /// 반환하고, 이미 도달했으면 새 학습을 시도하지 않고(TTS 호출이 있는
-  /// 학습 화면까지 갔다가 429로 실패하는 것을 기다릴 필요 없이, 로컬에
-  /// 이미 있는 카운트로 미리 판단한다) `null`을 반환한다. `advance()`와
-  /// `skip()`이 복습을 마치고 다음 학습으로 넘어가기 직전에 호출한다.
+  /// [AppRoutes.learning]을 반환하고, 이미 도달했으면 새 학습을 시도하지
+  /// 않고(TTS 호출이 있는 학습 화면까지 갔다가 429로 실패하는 것을 기다릴
+  /// 필요 없이, 로컬에 이미 있는 카운트로 미리 판단한다) `null`을
+  /// 반환한다. `advance()`와 `skip()`이 복습을 마치고 다음 학습으로
+  /// 넘어가기 직전에 호출한다.
+  ///
+  /// [AppRoutes.learning]을 받은 `ReviewScreen`은 그 라우트로 실제
+  /// `context.go`하는 대신 `startNextLearningInteractive`
+  /// (`topic_input_dialog.dart`)를 직접 호출한다 — 오늘 학습 세트를 아직
+  /// 생성한 적이 없는지(있다면 `TopicInputDialog`를 먼저 띄워야 하는지)는
+  /// 이 뷰모델이 아니라 그 함수가 판단한다.
   Future<String?> _startNextLearningOrNull(SessionStateService sessionStateService) async {
     final dailyTurnCount = await sessionStateService.readDailyTurnCount();
     if (dailyTurnCount >= kDailyTurnLimit) return null;
-    return startNextLearningSession(
-      sessionStateService: sessionStateService,
-      historyService: ref.read(historyServiceProvider),
-    );
+    return AppRoutes.learning;
   }
 
   /// 예외 [e]를 사용자에게 보여줄 메시지 문자열로 변환한다. `GeminiApiException`이면

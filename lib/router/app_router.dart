@@ -134,6 +134,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       return _resolveLearningEntryRoute(
+        location: location,
         sessionStateService: sessionStateService,
         historyService: historyService,
         reviewSessionService: reviewSessionService,
@@ -166,23 +167,42 @@ final routerProvider = Provider<GoRouter>((ref) {
   );
 });
 
-/// 새 학습 세션을 시작한다 — 지난번에 끝내지 못했던 exercise type을
-/// 이어서 진행하며(기록이 없으면 shadowing부터), 그 진입 화면의 route를
-/// 반환한다. 이 결정을 내리는 곳은 이 함수 하나뿐이며, `router`(더 이상
-/// 복습할 것이 없을 때)와 `ReviewScreen`(복습을 끝내거나 건너뛸 때)이
-/// 이 함수를 공유해서 호출한다 — 호출부마다 같은 로직을 재구현하지
-/// 않기 위함이다.
+/// 새 학습 세션을 시작한다 — 그 진입 화면의 route를 반환한다. 이 결정을
+/// 내리는 곳은 이 함수 하나뿐이며, `startNextLearningInteractive`
+/// (`topic_input_dialog.dart` — 오늘 학습 세트가 이미 있어 `TopicInputDialog`
+/// 없이 곧바로 넘어가는 경우와, 그 다이얼로그의 "Start"가 세트를 새로 만든
+/// 직후 모두)가 이 함수를 공유해서 호출한다 — 호출부마다 같은 로직을
+/// 재구현하지 않기 위함이다.
 ///
-/// [sessionStateService]로 새 세션 상태를 기록(`startNewSession`)하고,
-/// [historyService]에서 마지막으로 완료한 exercise type을 읽어와 다음에
-/// 무엇을 할지 정한다. 반환값은 `AppRoutes.shadowingDictation` 또는
+/// 다음에 시작할 exercise type은 우선 오늘 이미 만들어둔
+/// `SessionStateService.readSentenceQueue()`(있다면)로 정한다 — 그 세트는
+/// 항상 오늘의 `dailyTurnCount`번째 항목이 쉐도잉인지 작문인지를 고정된
+/// 순서(쉐도잉1-작문1-쉐도잉2-작문2...)로 담고 있으므로, 그 항목의 type을
+/// 그대로 신뢰하는 것이 가장 정확하다. 오늘 세트가 아직 없으면(정상적으로는
+/// 호출 전에 `startNextLearningInteractive`가 이미 세트를 만들어뒀을
+/// 것이므로 발생하지 않아야 하는 방어적 폴백) 예전 방식대로 지난번에
+/// 끝내지 못했던 exercise type을 이어서 진행한다(기록이 없으면 shadowing부터).
+///
+/// [sessionStateService]로 새 세션 상태를 기록(`startNewSession`)한다.
+/// [historyService]는 폴백 경로에서만 마지막으로 완료한 exercise type을
+/// 읽는 데 쓰인다. 반환값은 `AppRoutes.shadowingDictation` 또는
 /// `AppRoutes.writing` 중 하나다.
 Future<String> startNextLearningSession({
   required SessionStateService sessionStateService,
   required HistoryService historyService,
 }) async {
-  final lastType = await historyService.getLastExerciseType();
-  final nextType = (lastType ?? ExerciseType.writing).other;
+  final dailyTurnCount = await sessionStateService.readDailyTurnCount();
+  final queue = await sessionStateService.readSentenceQueue();
+  final queuedItem = queue?.itemAt(dailyTurnCount);
+
+  final ExerciseType nextType;
+  if (queuedItem != null) {
+    nextType = queuedItem.type;
+  } else {
+    final lastType = await historyService.getLastExerciseType();
+    nextType = (lastType ?? ExerciseType.writing).other;
+  }
+
   await sessionStateService.startNewSession(initialType: nextType);
   return nextType == ExerciseType.shadowing
       ? AppRoutes.shadowingDictation
@@ -208,12 +228,22 @@ Future<String> startNextLearningSession({
 ///     않으면 `ReviewSessionService`로 새 복습 세트를 직접 만든다 — 결과가
 ///     비어 있으면(복습할 것이 전혀 없는 경우, 이력이 아예 없는 신규
 ///     학습자 포함) (C)로, 아니면 그 세트를 저장하고 복습으로 이동한다.
-/// (C) 새 학습 세션을 시작한다(`startNextLearningSession` 참고). 오늘 학습
-///     `kDailyTurnLimit`턴을 이미 다 채웠는지는 여기서 사전에 확인하지
-///     않는다 — 그냥 시도하고, 다음 화면에서 TTS 호출이 실제로 429(할당량
-///     초과)에 걸리면 그 실패가 `RateLimitedScreen`(Retry / Reset API Key)
-///     으로 자연스럽게 이어지도록 둔다.
-Future<String> _resolveLearningEntryRoute({
+/// (C) `AppRoutes.learning`에 머무른다(`location == AppRoutes.learning ?
+///     null : AppRoutes.learning` 관용구 — 이미 거기 있으면 무한 리다이렉트를
+///     피하기 위해 `null`) — `LearningScreen`이 마운트되면
+///     `startNextLearningInteractive`(`topic_input_dialog.dart`)를 호출해,
+///     오늘 학습 세트를 아직 생성한 적이 없으면 `TopicInputDialog`를 먼저
+///     띄우고, 이미 있으면 다이얼로그 없이 곧바로
+///     [startNextLearningSession]으로 넘어간다. 라우터 redirect 자신은
+///     다이얼로그를 띄울 수 없으므로(콜백이 화면 트리 구성 이전에 실행되고
+///     반복 호출될 수 있다) 이 판단과 실행은 항상 `LearningScreen` 쪽에
+///     맡긴다. 오늘 학습 `kDailyTurnLimit`턴을 이미 다 채웠는지는 여기서
+///     사전에 확인하지 않는다 — 그냥 시도하고, 다음 화면에서 TTS 호출이
+///     실제로 429(할당량 초과)에 걸리면 그 실패가
+///     `RateLimitedScreen`(Retry / Reset API Key)으로 자연스럽게 이어지도록
+///     둔다.
+Future<String?> _resolveLearningEntryRoute({
+  required String location,
   required SessionStateService sessionStateService,
   required HistoryService historyService,
   required ReviewSessionService reviewSessionService,
@@ -260,10 +290,7 @@ Future<String> _resolveLearningEntryRoute({
   // 복습 화면으로 다시 보내지는 버그가 있었다.
   final alreadyReviewedToday = await sessionStateService.hasReviewedToday();
   if (alreadyReviewedToday) {
-    return startNextLearningSession(
-      sessionStateService: sessionStateService,
-      historyService: historyService,
-    );
+    return location == AppRoutes.learning ? null : AppRoutes.learning;
   }
 
   // "복습할 것이 있는가"를 `historyService.hasAnyHistory()`(day-summary
@@ -281,10 +308,7 @@ Future<String> _resolveLearningEntryRoute({
   // 비싼 검사를 추가하는 것도 아니다.
   final reviewSet = await reviewSessionService.buildReviewSet();
   if (reviewSet.isEmpty) {
-    return startNextLearningSession(
-      sessionStateService: sessionStateService,
-      historyService: historyService,
-    );
+    return location == AppRoutes.learning ? null : AppRoutes.learning;
   }
 
   await sessionStateService.writeReviewProgress(

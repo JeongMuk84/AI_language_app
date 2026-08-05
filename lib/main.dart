@@ -190,6 +190,9 @@ Future<void> applyResetFlags({
   if (targets['reviewed-today flag']!) {
     await sessionStateService.clearReviewedTodayFlag();
   }
+  if (targets['daily progress']!) {
+    await sessionStateService.clearSentenceQueue();
+  }
   if (targets['conversation history (all languages)']!) {
     await ConversationHistoryService(
       storageLocationService: storageLocationService,

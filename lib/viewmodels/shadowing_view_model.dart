@@ -143,12 +143,17 @@ class ShadowingViewModel extends Notifier<ShadowingState>
   bool _isLoadingSentence = false;
 
   /// 영속화된 세션에 진행 중이던 문장이 있으면 그것을 복원하고(재개
-  /// 케이스), 없으면 새 문장을 요청해 영속화한다. 이 메서드가 반환된
-  /// 시점부터 [currentSentence]/[currentTurnId]가 이번 턴 전체에 걸친
-  /// 단일 참조값이 된다 — TTS 플레이어, `submitDictation`의 채점 호출,
-  /// `analyzePronunciation`이 모두 [ShadowingState.sentence]의 동일한 값을
-  /// 읽어야 하는 이유다. ShadowingDictationScreen의 `initState`에서 호출된다
-  /// (로드 실패 후 재시도 버튼에서도 재호출).
+  /// 케이스), 없으면 오늘 하루치로 미리 생성해둔 `SentenceQueue`에서 이번
+  /// turn(`dailyTurnCount`번째) 항목을 꺼내 쓴다 — `TopicInputDialog`를 거쳐
+  /// 정상적으로 시작된 세션이라면 항상 있어야 하며, 없거나(예: 세트를 거치지
+  /// 않고 진입한 첫 세션) 인덱스가 shadowing이 아니면 예전처럼
+  /// `GeminiService.generateNextSentence`로 즉석에서 새로 생성해 안전하게
+  /// 폴백한다. 이 메서드가 반환된 시점부터 [currentSentence]/[currentTurnId]
+  /// 가 이번 턴 전체에 걸친 단일 참조값이 된다 — TTS 플레이어,
+  /// `submitDictation`의 채점 호출, `analyzePronunciation`이 모두
+  /// [ShadowingState.sentence]의 동일한 값을 읽어야 하는 이유다.
+  /// ShadowingDictationScreen의 `initState`에서 호출된다(로드 실패 후 재시도
+  /// 버튼에서도 재호출).
   Future<void> loadSentence() async {
     if (_isLoadingSentence) return;
     _isLoadingSentence = true;
@@ -166,8 +171,14 @@ class ShadowingViewModel extends Notifier<ShadowingState>
         sentence = session.currentSentence!;
         turnId = session.currentTurnId!;
       } else {
-        final history = await ref.read(conversationHistoryServiceProvider).readAll();
-        sentence = await gemini.generateNextSentence(direction: 'target', history: history);
+        final dailyTurnCount = await sessionService.readDailyTurnCount();
+        final queuedItem = (await sessionService.readSentenceQueue())?.itemAt(dailyTurnCount);
+        if (queuedItem != null && queuedItem.type == ExerciseType.shadowing) {
+          sentence = queuedItem.text;
+        } else {
+          final history = await ref.read(conversationHistoryServiceProvider).readAll();
+          sentence = await gemini.generateNextSentence(direction: 'target', history: history);
+        }
         turnId = newTurnId();
         await sessionService.setCurrentSentence(session, sentence: sentence, turnId: turnId);
       }

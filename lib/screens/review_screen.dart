@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../constants/learning_constants.dart';
 import '../providers/service_providers.dart';
+import '../router/app_router.dart';
 import '../viewmodels/review_view_model.dart';
 import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
@@ -13,16 +14,18 @@ import '../widgets/audio_recorder_widget.dart';
 import '../widgets/feedback_box.dart';
 import '../widgets/reset_api_key_button.dart';
 import 'rate_limited_screen.dart';
+import 'topic_input_dialog.dart';
 
 /// 스페이스드 리뷰(spaced review) 화면. 라우트 `/learning/review`
 /// (`AppRoutes.review`)에 연결된다. `AppRouter`의 redirect 로직뿐 아니라,
 /// 학습 화면들의 "다음으로 넘어가기"(오늘 학습 한도 도달 시)와
 /// `EndSessionButton`(학습 종료 시)도 항상 이 화면으로 곧장 이동한다.
-/// `ReviewViewModel`(`advance`/`skip`)이 반환하는 라우트를 통해 다음 학습
-/// 화면(Writing 또는 Shadowing Dictation)으로 이어지거나, 오늘 학습
-/// `dailyTurnCount` 한도에 이미 도달한 상태라면 대신 [RateLimitedScreen]
-/// (Retry / Reset API Key)이 뜬다. [ReviewViewModel]을 통해 문항별 번역
-/// 제출/채점과 발음 분석을 처리한다.
+/// `ReviewViewModel`(`advance`/`skip`)이 반환하는 결과에 따라, 오늘 학습
+/// 세트가 아직 없으면 `TopicInputDialog`를 먼저 띄운 뒤 다음 학습 화면
+/// (Writing 또는 Shadowing Dictation)으로 이어지거나(`startNextLearningInteractive`
+/// 참고), 오늘 학습 `dailyTurnCount` 한도에 이미 도달한 상태라면 대신
+/// [RateLimitedScreen](Retry / Reset API Key)이 뜬다. [ReviewViewModel]을
+/// 통해 문항별 번역 제출/채점과 발음 분석을 처리한다.
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key});
 
@@ -58,6 +61,22 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     return ref.read(reviewViewModelProvider.notifier).submitTranslation(_controller.text);
   }
 
+  /// 번역 입력 필드의 [TextField.onChanged]로 연결된다. Enter 키가
+  /// 눌리면(줄바꿈 문자로 들어옴) 그 줄바꿈을 지운 뒤 곧바로 [_submit]을
+  /// 호출한다 — `minLines`/`maxLines`로 여러 줄 표시는 계속 허용하면서도,
+  /// Enter 자체는 줄바꿈 삽입이 아니라 제출로 동작하게 한다(Flutter는
+  /// `maxLines`가 1보다 클 때 하드웨어 Enter를 가로채 `onSubmitted`로
+  /// 넘겨주지 않으므로, 이 방식이 필요하다).
+  void _onTranslationChanged(String value) {
+    if (!value.contains('\n')) return;
+    final stripped = value.replaceAll('\n', '');
+    _controller.value = TextEditingValue(
+      text: stripped,
+      selection: TextSelection.collapsed(offset: stripped.length),
+    );
+    if (!ref.read(reviewViewModelProvider).isSubmittingTranslation) _submit();
+  }
+
   /// AudioRecorderWidget 녹음이 끝나면 호출된다.
   /// [ReviewViewModel.analyzePronunciation]으로 녹음된 [bytes]를 분석
   /// 요청으로 보낸다.
@@ -82,19 +101,30 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 
   /// [ReviewViewModel.advance]/[ReviewViewModel.skip]이 반환한 [route]를
-  /// 처리한다 — 라우트 문자열이 있으면 `context.go`로 그곳으로 이동하고,
-  /// `null`이면(오늘 학습 `dailyTurnCount` 한도에 이미 도달해 새 학습을
-  /// 시도하지 않기로 한 경우) go_router route로 등록되어 있지 않은
-  /// [RateLimitedScreen]을 `Navigator`로 직접 push한다 — `AudioPlayButton`이
-  /// 429를 만났을 때와 동일한 방식이다. "Retry"를 누르면 이 화면을 pop해
-  /// ReviewScreen으로 돌아오고, "Reset API Key"를 누르면 키 삭제 +
-  /// `dailyTurnCount` 리셋 + 앱 재시작으로 이어진다.
+  /// 처리한다:
+  /// - `null`이면(오늘 학습 `dailyTurnCount` 한도에 이미 도달해 새 학습을
+  ///   시도하지 않기로 한 경우) go_router route로 등록되어 있지 않은
+  ///   [RateLimitedScreen]을 `Navigator`로 직접 push한다 —
+  ///   `AudioPlayButton`이 429를 만났을 때와 동일한 방식이다. "Retry"를
+  ///   누르면 이 화면을 pop해 ReviewScreen으로 돌아오고, "Reset API Key"를
+  ///   누르면 키 삭제 + `dailyTurnCount` 리셋 + 앱 재시작으로 이어진다.
+  /// - [AppRoutes.learning]이면(다음 학습을 시작해야 하는 경우)
+  ///   `context.go`로 그 라우트에 실제로 이동하는 대신
+  ///   [startNextLearningInteractive]를 직접 호출한다 — 오늘 학습 세트를
+  ///   아직 생성한 적이 없으면 그 함수가 이 화면 위에 `TopicInputDialog`를
+  ///   띄운다.
+  /// - 그 외의 라우트 문자열이면(복습이 아직 진행 중이면 [AppRoutes.review])
+  ///   `context.go`로 그곳으로 이동한다.
   Future<void> _goToRouteOrRateLimited(String? route) async {
     if (route == null) {
       await Navigator.of(
         context,
         rootNavigator: true,
       ).push(MaterialPageRoute(builder: (_) => const RateLimitedScreen()));
+      return;
+    }
+    if (route == AppRoutes.learning) {
+      await startNextLearningInteractive(context, ref);
       return;
     }
     context.go(route);
@@ -232,6 +262,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                       enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
                       minLines: 1,
                       maxLines: 3,
+                      textInputAction: TextInputAction.done,
+                      onChanged: _onTranslationChanged,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
                         hintText: 'Write the translation',

@@ -150,10 +150,15 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
   /// 전체 근거)가 `ShadowingViewModel.loadSentence`에도 있다.
   bool _isLoadingSentence = false;
 
-  /// 이 메서드가 반환된 시점부터 [nativeSentence]가 이번 턴 전체에 걸친
-  /// 단일 참조값이 된다 — `submitTranslation`의 채점 호출이 이 값을 직접
-  /// 읽는다. WritingScreen의 `initState`에서 호출된다(로드 실패 후 재시도
-  /// 버튼에서도 재호출).
+  /// 영속화된 세션에 진행 중이던 문장이 있으면 그것을 복원하고(재개
+  /// 케이스), 없으면 오늘 하루치로 미리 생성해둔 `SentenceQueue`에서 이번
+  /// turn(`dailyTurnCount`번째) 항목을 꺼내 쓴다 — 없거나 인덱스가 writing이
+  /// 아니면 예전처럼 `GeminiService.generateNextSentence`로 즉석에서 새로
+  /// 생성해 안전하게 폴백한다(`ShadowingViewModel.loadSentence`와 동일한
+  /// 패턴). 이 메서드가 반환된 시점부터 [nativeSentence]가 이번 턴 전체에
+  /// 걸친 단일 참조값이 된다 — `submitTranslation`의 채점 호출이 이 값을
+  /// 직접 읽는다. WritingScreen의 `initState`에서 호출된다(로드 실패 후
+  /// 재시도 버튼에서도 재호출).
   Future<void> loadSentence() async {
     if (_isLoadingSentence) return;
     _isLoadingSentence = true;
@@ -171,8 +176,14 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
         sentence = session.currentSentence!;
         turnId = session.currentTurnId!;
       } else {
-        final history = await ref.read(conversationHistoryServiceProvider).readAll();
-        sentence = await gemini.generateNextSentence(direction: 'native', history: history);
+        final dailyTurnCount = await sessionService.readDailyTurnCount();
+        final queuedItem = (await sessionService.readSentenceQueue())?.itemAt(dailyTurnCount);
+        if (queuedItem != null && queuedItem.type == ExerciseType.writing) {
+          sentence = queuedItem.text;
+        } else {
+          final history = await ref.read(conversationHistoryServiceProvider).readAll();
+          sentence = await gemini.generateNextSentence(direction: 'native', history: history);
+        }
         turnId = newTurnId();
         await sessionService.setCurrentSentence(session, sentence: sentence, turnId: turnId);
       }

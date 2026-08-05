@@ -4,6 +4,7 @@ import 'dart:io';
 import '../models/exercise_type.dart';
 import '../models/learning_sub_step.dart';
 import '../models/review_progress.dart';
+import '../models/sentence_queue.dart';
 import '../models/session_state.dart';
 import 'day_boundary_service.dart';
 import 'storage_location_service.dart';
@@ -69,6 +70,15 @@ class SessionStateService {
   Future<File> _reviewedTodayFile() async {
     final dir = await _storageLocationService.baseDirectory();
     return File('${dir.path}/review_completed_today.json');
+  }
+
+  /// 오늘 하루치로 미리 생성해둔 10문장 세트가 저장되는
+  /// `sentence_queue.json` 파일 핸들을 반환한다. [readSentenceQueue],
+  /// [writeSentenceQueue], [clearSentenceQueue]가 내부적으로 사용하는
+  /// 헬퍼다.
+  Future<File> _sentenceQueueFile() async {
+    final dir = await _storageLocationService.baseDirectory();
+    return File('${dir.path}/sentence_queue.json');
   }
 
   /// Returns null when there's no active session.
@@ -408,6 +418,50 @@ class SessionStateService {
   /// 부작용: review_completed_today.json 파일이 있으면 삭제한다.
   Future<void> clearReviewedTodayFlag() async {
     final file = await _reviewedTodayFile();
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
+  /// 오늘 하루치로 미리 생성해둔 [SentenceQueue]를 반환한다. 저장된 것이
+  /// 없거나, 저장된 것이 오늘과 다른 태평양 날짜에 생성된 것이면(자정
+  /// 롤오버로 낡은 세트가 됨) `null`을 반환한다 — [readDailyTurnCount]와
+  /// 동일한 날짜 비교 방식이다. 낡은 세트를 여기서 지우지는 않는다:
+  /// 새 세트를 만들지 여부는 호출자(`startNextLearningSession`)의
+  /// 책임이며, 어차피 [writeSentenceQueue]가 새 세트로 덮어쓴다.
+  ///
+  /// `startNextLearningSession`이 다음에 시작할 exercise type을 정할 때,
+  /// `ShadowingViewModel`/`WritingViewModel.loadSentence()`가 이번 turn의
+  /// 문장을 꺼내 쓸 때 호출한다.
+  /// 반환값: 오늘 생성된 [SentenceQueue], 없거나 낡았으면 `null`.
+  Future<SentenceQueue?> readSentenceQueue() async {
+    final file = await _sentenceQueueFile();
+    if (!await file.exists()) return null;
+    final content = await file.readAsString();
+    if (content.trim().isEmpty) return null;
+    final queue = SentenceQueue.fromJson(jsonDecode(content) as Map<String, dynamic>);
+    if (!_dayBoundaryService.isSamePacificDay(queue.generatedAt, DateTime.now())) return null;
+    return queue;
+  }
+
+  /// [queue]를 sentence_queue.json에 직렬화해 저장한다.
+  /// `TopicInputDialog`가 `GeminiService.generateDailySentenceSet`으로
+  /// 오늘 하루치 세트를 새로 만든 직후 호출한다.
+  /// [queue]: 저장할 오늘의 문장 세트.
+  /// 부작용: sentence_queue.json 파일을 덮어쓴다.
+  Future<void> writeSentenceQueue(SentenceQueue queue) async {
+    final file = await _sentenceQueueFile();
+    await file.writeAsString(jsonEncode(queue.toJson()));
+  }
+
+  /// 저장된 문장 세트를 삭제한다. `main.dart`의 `RESET_APP` 개발/테스트용
+  /// 플래그와 Settings 화면의 "Reset All Data"에서 사용된다 — 날짜가
+  /// 바뀌면 [readSentenceQueue]가 알아서 낡은 세트를 무시하므로, 그 외의
+  /// 경로(예: "Reset API Key")에서는 일부러 지우지 않는다: 같은 날 안에서는
+  /// 이미 생성된 세트를 그대로 재사용해 불필요한 Gemini 호출을 피한다.
+  /// 부작용: sentence_queue.json 파일이 있으면 삭제한다.
+  Future<void> clearSentenceQueue() async {
+    final file = await _sentenceQueueFile();
     if (await file.exists()) {
       await file.delete();
     }

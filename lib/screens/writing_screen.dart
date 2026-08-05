@@ -50,6 +50,22 @@ class _WritingScreenState extends ConsumerState<WritingScreen> {
     return ref.read(writingViewModelProvider.notifier).submitTranslation(_controller.text);
   }
 
+  /// 번역 입력 필드의 [TextField.onChanged]로 연결된다. Enter 키가
+  /// 눌리면(줄바꿈 문자로 들어옴) 그 줄바꿈을 지운 뒤 곧바로 [_submit]을
+  /// 호출한다 — `minLines`/`maxLines`로 여러 줄 표시는 계속 허용하면서도,
+  /// Enter 자체는 줄바꿈 삽입이 아니라 제출로 동작하게 한다(Flutter는
+  /// `maxLines`가 1보다 클 때 하드웨어 Enter를 가로채 `onSubmitted`로
+  /// 넘겨주지 않으므로, 이 방식이 필요하다).
+  void _onTranslationChanged(String value) {
+    if (!value.contains('\n')) return;
+    final stripped = value.replaceAll('\n', '');
+    _controller.value = TextEditingValue(
+      text: stripped,
+      selection: TextSelection.collapsed(offset: stripped.length),
+    );
+    if (!ref.read(writingViewModelProvider).isSubmittingTranslation) _submit();
+  }
+
   /// "Try Again" 버튼이 눌리면 호출된다. 입력값을 지우고
   /// [WritingViewModel.resetTranslationAttempt]로 시도를 초기화한다.
   void _retry() {
@@ -137,6 +153,8 @@ class _WritingScreenState extends ConsumerState<WritingScreen> {
                 enabled: !state.isSubmittingTranslation,
                 minLines: 1,
                 maxLines: 3,
+                textInputAction: TextInputAction.done,
+                onChanged: _onTranslationChanged,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Write your translation',
