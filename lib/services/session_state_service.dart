@@ -108,11 +108,17 @@ class SessionStateService {
   }
 
   /// Deletes the persisted session, if any. Used by "학습 종료", the
-  /// midnight-rollover recovery path, and the `RESET_APP`/`RESET_SESSION`
-  /// dev/test flags and Settings' "Reset All Data".
+  /// midnight-rollover recovery path, the `RESET_APP`/`RESET_SESSION`
+  /// dev/test flags, Settings' "Reset All Data", and `ResetApiKeyButton`'s
+  /// "Reset API Key" (forces the router past its same-day session-resume
+  /// branch so `/learning` is reached again — see that button's doc
+  /// comment).
   /// (저장되어 있는 세션이 있으면 삭제한다. "학습 종료", 자정 롤오버 복구
   /// 경로, `main.dart`의 `RESET_APP`/`RESET_SESSION` 개발/테스트용
-  /// 플래그, Settings 화면의 "Reset All Data"에서 사용된다.)
+  /// 플래그, Settings 화면의 "Reset All Data", `ResetApiKeyButton`의
+  /// "Reset API Key"(라우터의 같은 날 세션 재개 분기를 건너뛰고 다시
+  /// `/learning`으로 도달하게 하기 위함 — 해당 버튼의 문서 참고)에서
+  /// 사용된다.)
   /// 부작용: session_state.json 파일이 있으면 삭제한다.
   Future<void> clearSession() async {
     final file = await _stateFile();
@@ -455,10 +461,11 @@ class SessionStateService {
   }
 
   /// 저장된 문장 세트를 삭제한다. `main.dart`의 `RESET_APP` 개발/테스트용
-  /// 플래그와 Settings 화면의 "Reset All Data"에서 사용된다 — 날짜가
-  /// 바뀌면 [readSentenceQueue]가 알아서 낡은 세트를 무시하므로, 그 외의
-  /// 경로(예: "Reset API Key")에서는 일부러 지우지 않는다: 같은 날 안에서는
-  /// 이미 생성된 세트를 그대로 재사용해 불필요한 Gemini 호출을 피한다.
+  /// 플래그, Settings 화면의 "Reset All Data", 그리고 `ResetApiKeyButton`의
+  /// "Reset API Key"에서 사용된다 — 날짜가 바뀌면 [readSentenceQueue]가
+  /// 알아서 낡은 세트를 무시하므로 자연스러운 자정 롤오버에서는 이 메서드가
+  /// 필요 없지만, "Reset API Key"처럼 날짜 경계와 무관하게 "오늘 세트를
+  /// 강제로 새로 만들어야 하는" 이벤트에서는 명시적으로 호출해 비운다.
   /// 부작용: sentence_queue.json 파일이 있으면 삭제한다.
   Future<void> clearSentenceQueue() async {
     final file = await _sentenceQueueFile();
