@@ -185,7 +185,8 @@ class SettingsViewModel extends Notifier<SettingsState> {
   /// config.json, 진행 중이던 세션, 모든 history 파일, 언어별 handoff 파일,
   /// 일일 턴 카운터, 모든 언어의 TTS 캐시, 리뷰 히스토리, 대화 히스토리,
   /// 진행 중이던 리뷰, 오늘 복습을 마쳤다는 표시, 오늘 하루치로 미리
-  /// 생성해둔 문장 세트까지 전부 대상이다.
+  /// 생성해둔 문장 세트, 모든 언어의 누적 학습 요약, 모든 언어의 점진적
+  /// 난이도 진행 상태까지 전부 대상이다.
   /// 호출한 쪽(SettingsDialog)이 이후 `RestartWidget`으로 앱을
   /// 재시작시켜 모든 상태가 처음부터 다시 계산되도록 해야 한다.
   ///
@@ -206,6 +207,8 @@ class SettingsViewModel extends Notifier<SettingsState> {
     await sessionStateService.clearReviewedTodayFlag();
     await sessionStateService.clearSentenceQueue();
     await ref.read(conversationHistoryServiceProvider).clearAllLanguages();
+    await ref.read(learningSummaryServiceProvider).clearAllLanguages();
+    await ref.read(difficultyProgressionServiceProvider).clearAllLanguages();
   }
 }
 

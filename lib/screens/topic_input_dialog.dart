@@ -105,15 +105,17 @@ class _TopicInputDialogState extends ConsumerState<TopicInputDialog> {
     try {
       final sessionStateService = ref.read(sessionStateServiceProvider);
       final historyService = ref.read(historyServiceProvider);
-      final config = await ref.read(configServiceProvider).readConfig();
       final history = await ref.read(conversationHistoryServiceProvider).readAll();
+      final cumulativeSummary = await ref.read(learningSummaryServiceProvider).readCumulativeSummary();
+      final difficultyScore = await ref.read(difficultyProgressionServiceProvider).readTodayScore();
 
       final queue = await ref
           .read(geminiServiceProvider)
           .generateDailySentenceSet(
             topicInput: _controller.text,
             history: history,
-            difficultyLevel: config.difficultyLevel,
+            cumulativeSummary: cumulativeSummary,
+            difficultyScore: difficultyScore,
           );
       await sessionStateService.writeSentenceQueue(queue);
 

@@ -8,8 +8,10 @@ import 'services/api_key_storage_service.dart';
 import 'services/config_service.dart';
 import 'services/conversation_history_service.dart';
 import 'services/day_boundary_service.dart';
+import 'services/difficulty_progression_service.dart';
 import 'services/handoff_service.dart';
 import 'services/history_service.dart';
+import 'services/learning_summary_service.dart';
 import 'services/review_history_service.dart';
 import 'services/session_state_service.dart';
 import 'services/storage_location_service.dart';
@@ -25,13 +27,13 @@ import 'widgets/restart_widget.dart';
 ///
 /// `RESET_APP=true`이면 모든 것을 지운다(API 키, config.json, 세션
 /// 상태, history, handoff 파일들, 일일 turn 카운터, TTS 캐시, 복습
-/// 이력, 진행 중이던 복습, 오늘 복습을 마쳤다는 표시까지) — 아래 세
-/// 플래그를 합친 것과 동등하며,
+/// 이력, 진행 중이던 복습, 오늘 복습을 마쳤다는 표시, 누적 학습 요약,
+/// 점진적 난이도 진행 상태까지) — 아래 세 플래그를 합친 것과 동등하며,
 /// 거기에 더해 config.json, handoff 파일, 일일 진행도, TTS 캐시, 복습
-/// 데이터까지 지운다(이 항목들은 각자의 개별 플래그가 없는데, native/
-/// target language를 지우는 부분 초기화나 일일 한도/캐시/복습 상태만
-/// 오래된 채로 남기는 초기화는 의미 있는 "완전" 초기화가 아니기
-/// 때문이다).
+/// 데이터, 누적 학습 요약, 난이도 진행 상태까지 지운다(이 항목들은 각자의
+/// 개별 플래그가 없는데, native/target language를 지우는 부분 초기화나
+/// 일일 한도/캐시/복습/요약/진행 상태만 오래된 채로 남기는 초기화는 의미
+/// 있는 "완전" 초기화가 아니기 때문이다).
 const _resetApp = bool.fromEnvironment('RESET_APP');
 
 /// secure storage에 저장된 API 키만 지운다.
@@ -136,6 +138,8 @@ Future<void> applyResetFlags({
     'review progress': _resetApp,
     'reviewed-today flag': _resetApp,
     'conversation history (all languages)': _resetApp,
+    'learning summary (all languages)': _resetApp,
+    'difficulty progression (all languages)': _resetApp,
   };
 
   if (!targets.values.any((shouldClear) => shouldClear)) {
@@ -197,6 +201,19 @@ Future<void> applyResetFlags({
     await ConversationHistoryService(
       storageLocationService: storageLocationService,
       configService: configService,
+    ).clearAllLanguages();
+  }
+  if (targets['learning summary (all languages)']!) {
+    await LearningSummaryService(
+      storageLocationService: storageLocationService,
+      configService: configService,
+    ).clearAllLanguages();
+  }
+  if (targets['difficulty progression (all languages)']!) {
+    await DifficultyProgressionService(
+      storageLocationService: storageLocationService,
+      configService: configService,
+      dayBoundaryService: dayBoundaryService,
     ).clearAllLanguages();
   }
 

@@ -129,7 +129,8 @@ class GeminiService {
        _configService = configService ?? ConfigService(),
        _ttsCache = ttsCacheService ?? TtsCacheService();
 
-  static const _model = 'gemini-flash-lite-latest';
+    static const _model = 'gemini-flash-lite-latest';
+    //static const _model = 'gemini-flash-latest';
 
   /// Level returned by [evaluateLevelTest] outright (no Gemini call) when
   /// too few questions were answered to grade meaningfully.
@@ -464,66 +465,82 @@ quotes, no labels, no markdown.
     );
   }
 
-  /// CEFR 레벨별로 문장 길이(단어 수)·문법 복잡도 목표치와 그 수준을
-  /// 보여주는 구조 예시 문장을 만들어, [generateDailySentenceSet] 프롬프트에
-  /// 그대로 삽입할 문자열로 반환한다. `evaluateLevelTest`가 반환해
-  /// `config.difficultyLevel`에 저장되는 것과 동일한 CEFR 토큰 체계(A1~C2)를
-  /// 쓰므로 두 체계가 어긋날 일이 없다 — 인식하지 못하는 값(레벨 테스트를
-  /// 아직 거치지 않은 등)은 중급(B1) 기준으로 취급한다.
-  ///
-  /// 이전에는 [generateNextSentence]가 `difficultyLevel`을 프롬프트에 전혀
-  /// 반영하지 않아, 문장 길이가 사실상 무작위로 짧거나 길게 나오는 원인이
-  /// 됐다 — 이 헬퍼가 그 공백을 메운다.
-  /// [level]: `config.difficultyLevel`에 저장된 CEFR 토큰(또는 `null`).
+  /// 6개의 CEFR 앵커(A1~C2)를 0~100 연속 난이도 점수 축 위에 고정 배치한
+  /// 표 — `DifficultyProgressionService`가 쓰는 것과 동일한 매핑(A1=0,
+  /// A2=20, B1=40, B2=60, C1=80, C2=100)이다. [_lengthGuidanceForScore]가
+  /// 임의의 점수에 가장 가까운 구조 예시 문장을 고를 때만 사용한다 — 실제
+  /// 목표 단어 수/복잡도는 이 표가 아니라 점수로부터 직접 연속적으로
+  /// 계산되므로, 앵커 사이에 있는 점수도 6단계로 뚝뚝 끊기지 않는다.
+  static const _cefrAnchors = [
+    (score: 0.0, example: '"I drink coffee every morning."'),
+    (score: 20.0, example: '"I went to the market yesterday because we needed food."'),
+    (
+      score: 40.0,
+      example: '"When I got home, I realized I had forgotten my keys at the office."',
+    ),
+    (
+      score: 60.0,
+      example:
+          '"Although the weather was terrible, we decided to go hiking anyway, since it '
+          'was our only free weekend."',
+    ),
+    (
+      score: 80.0,
+      example:
+          '"Despite having reviewed the proposal thoroughly, the committee remained '
+          'unconvinced that the plan would achieve what it promised."',
+    ),
+    (
+      score: 100.0,
+      example:
+          '"Had it not been for the last-minute intervention of a former colleague, the '
+          'entire negotiation would almost certainly have collapsed."',
+    ),
+  ];
+
+  /// [score](0~100 연속 난이도 점수, `DifficultyProgressionService.readTodayScore`
+  /// 참고)를 [generateDailySentenceSet] 프롬프트에 그대로 삽입할 길이/복잡도
+  /// 가이드 문자열로 변환한다. 목표 단어 수는 점수에서 선형으로 직접
+  /// 계산해(4~25단어) 프롬프트에 숫자 그대로 넣는다 — 예전처럼 A1~C2
+  /// 여섯 단계 중 하나로 반올림하지 않으므로, 매일 아주 조금씩 오르는 점수가
+  /// 매일 아주 조금씩 다른 목표 단어 수로 그대로 이어진다. 구조 예시
+  /// 문장만 [_cefrAnchors] 중 가장 가까운 것을 골라 참고용으로 붙인다
+  /// (문장 예시 자체를 연속적으로 보간할 수는 없으므로).
+  /// [score]: 0~100 범위의 연속 난이도 점수(범위를 벗어나면 clamp).
   /// 반환값: 프롬프트에 삽입할 길이/복잡도 가이드 + 예시 문장 문자열.
-  String _lengthGuidanceFor(String? level) {
-    const guidance = {
-      'A1': (
-        words: '4-7',
-        complexity: 'a single simple clause, present tense, everyday vocabulary only',
-        example: '"I drink coffee every morning."',
-      ),
-      'A2': (
-        words: '6-10',
-        complexity:
-            'one simple clause, may use past or future tense, at most one connector (and/but/because)',
-        example: '"I went to the market yesterday because we needed food."',
-      ),
-      'B1': (
-        words: '9-14',
-        complexity: 'a main clause plus one subordinate clause (when/if/because/that), varied tenses',
-        example: '"When I got home, I realized I had forgotten my keys at the office."',
-      ),
-      'B2': (
-        words: '12-18',
-        complexity: 'multiple clauses, relative clauses, connectors like although/despite/in order to',
-        example:
-            '"Although the weather was terrible, we decided to go hiking anyway, since it '
-            'was our only free weekend."',
-      ),
-      'C1': (
-        words: '15-22',
-        complexity:
-            'multiple subordinate or relative clauses, sophisticated connectors, less common vocabulary',
-        example:
-            '"Despite having reviewed the proposal thoroughly, the committee remained '
-            'unconvinced that the plan would achieve what it promised."',
-      ),
-      'C2': (
-        words: '18-25',
-        complexity: 'complex nested clauses, idiomatic and nuanced expressions, near-native phrasing',
-        example:
-            '"Had it not been for the last-minute intervention of a former colleague, the '
-            'entire negotiation would almost certainly have collapsed."',
-      ),
-    };
-    final g = guidance[level] ?? guidance['B1']!;
+  String _lengthGuidanceForScore(double score) {
+    final clamped = score.clamp(0.0, 100.0);
+    // 0점 -> 4단어, 100점 -> 25단어 (이전 CEFR 표의 A1 하한/C2 상한과 일치).
+    final targetWords = (4 + (clamped / 100) * 21).round();
+    // 0점 -> 문장당 절 1개, 100점 -> 문장당 절 약 4개.
+    final targetClauses = 1 + (clamped / 100) * 3;
+
+    var nearest = _cefrAnchors.first;
+    var smallestDiff = (clamped - nearest.score).abs();
+    for (final anchor in _cefrAnchors.skip(1)) {
+      final diff = (clamped - anchor.score).abs();
+      if (diff < smallestDiff) {
+        nearest = anchor;
+        smallestDiff = diff;
+      }
+    }
+
     return '''
-Target length: approximately ${g.words} words per sentence.
-Target grammatical complexity: ${g.complexity}.
-Structural example at this level (shows length/complexity only - write your
-actual sentences in the correct languages specified above, not English,
-unless English happens to be one of them): ${g.example}
+Difficulty target: ${clamped.toStringAsFixed(1)}/100 on a continuous scale
+(0 = complete beginner, 100 = near-native mastery). This is a precise
+numeric target, not one of a few fixed levels - treat it as exact, not
+rounded to the nearest tier.
+Target length: approximately $targetWords words per sentence.
+Target grammatical complexity: aim for roughly ${targetClauses.toStringAsFixed(1)}
+clause(s) per sentence on average. Near 0/100: a single simple clause,
+present tense, everyday vocabulary only. Near 100/100: multiple nested or
+subordinate clauses, sophisticated connectors (although/despite/in order to/
+nevertheless), idiomatic and nuanced expressions, varied tenses. Interpolate
+smoothly between these two ends based on the ${clamped.toStringAsFixed(1)}/100
+target above - do not jump straight to either extreme.
+Structural example at a similar difficulty (illustrates length/complexity
+only - write your actual sentences in the correct languages specified above,
+not English, unless English happens to be one of them): ${nearest.example}
 ''';
   }
 
@@ -533,38 +550,46 @@ unless English happens to be one of them): ${g.example}
   /// sentence generation happen in this same call (no separate
   /// classification request): if [topicInput] is empty or judged
   /// meaningless (gibberish, random symbols), Gemini silently invents a
-  /// random topic (considering [history] to avoid repeating it) instead;
-  /// otherwise it builds the set around the given topic. All 10 sentences
-  /// form one connected conversation, alternating shadowing/writing in
-  /// order, with length/complexity calibrated to [difficultyLevel] via
-  /// [_lengthGuidanceFor] so a set doesn't mix very short and very long
-  /// sentences at random.
+  /// random topic (considering [history] AND [cumulativeSummary] to avoid
+  /// repeating it) instead; otherwise it builds the set around the given
+  /// topic while still steering away from what [cumulativeSummary] shows was
+  /// already covered. All 10 sentences form one connected conversation,
+  /// alternating shadowing/writing in order, with length/complexity
+  /// calibrated to [difficultyScore] via [_lengthGuidanceForScore] so a set
+  /// doesn't mix very short and very long sentences at random.
   /// (하루치 학습 세트(쉐도잉 5 + 작문 5, 총 [kDailyTurnLimit]개)를
   /// [generateNextSentence]처럼 turn마다 한 번씩이 아니라 단 한 번의 호출로
   /// 모두 생성한다. 주제 판별과 문장 생성을 같은 호출 안에서 함께 처리한다
   /// (별도 판별 요청 없음): [topicInput]이 비어 있거나 무의미(횡설수설,
   /// 무작위 기호)하다고 판단되면 Gemini가 조용히 무작위 주제를 지어내고
-  /// ([history]를 고려해 반복을 피함), 그렇지 않으면 주어진 주제로 세트를
-  /// 구성한다. 10문장 전체가 하나의 이어지는 대화를 이루도록 shadowing/
-  /// writing을 순서대로 번갈아 배치하며, 길이/복잡도는 [_lengthGuidanceFor]를
-  /// 통해 [difficultyLevel]에 맞춰 보정되어, 한 세트 안에서 아주 짧은
-  /// 문장과 아주 긴 문장이 무작위로 섞이지 않게 한다.)
+  /// ([history]와 [cumulativeSummary] 모두를 고려해 반복을 피함), 그렇지
+  /// 않으면 주어진 주제로 세트를 구성하되 [cumulativeSummary]가 보여주는
+  /// 이미 다룬 내용은 피해서 새롭게 구성한다. 10문장 전체가 하나의 이어지는
+  /// 대화를 이루도록 shadowing/writing을 순서대로 번갈아 배치하며, 길이/
+  /// 복잡도는 [_lengthGuidanceForScore]를 통해 [difficultyScore]에 맞춰
+  /// 보정되어, 한 세트 안에서 아주 짧은 문장과 아주 긴 문장이 무작위로
+  /// 섞이지 않게 한다.)
   ///
   /// `TopicInputDialog`가 "Start" 버튼이 눌렸을 때 호출하며, 결과를
   /// `SessionStateService.writeSentenceQueue`로 저장해 각 turn이 순서대로
   /// 꺼내 쓴다.
   /// [topicInput]: 학습자가 입력한 주제. 비어 있으면 무작위 주제로 처리.
   /// [history]: 대화 흐름 연속성을 위한 최근 학습 이력(전체 중 마지막
-  /// [kHistoryContextWindow]개만 프롬프트에 사용).
-  /// [difficultyLevel]: `config.difficultyLevel`에 저장된 CEFR 토큰. `null`이면
-  /// B1 기준으로 취급.
+  /// [kHistoryContextWindow]개만 프롬프트에 사용) — 오늘/최근 세션의
+  /// *직접적인* 문맥이며, 날짜를 넘어 누적되는 [cumulativeSummary]와는
+  /// 역할이 다르다.
+  /// [cumulativeSummary]: `LearningSummaryService.readCumulativeSummary()`가
+  /// 반환한, 이 언어로 지금까지 학습한 전체 내용의 압축 요약(없으면 `null`).
+  /// [difficultyScore]: `DifficultyProgressionService.readTodayScore()`가
+  /// 계산한 오늘의 0~100 연속 난이도 점수.
   /// 반환값: 오늘 순서대로 꺼내 쓸 10개 문장을 담은 [SentenceQueue].
   /// 부작용: Gemini API에 네트워크 요청을 보내고, 생성된 세트 요약을 디버그
   /// 로그로 남긴다.
   Future<SentenceQueue> generateDailySentenceSet({
     String? topicInput,
     required List<ConversationTurn> history,
-    required String? difficultyLevel,
+    required String? cumulativeSummary,
+    required double difficultyScore,
   }) async {
     final apiKey = await _requireApiKey();
     final config = await _configService.readConfig();
@@ -590,23 +615,38 @@ unless English happens to be one of them): ${g.example}
         ? 'The learner did not suggest a topic.'
         : 'The learner suggested this topic: "$trimmedTopic"';
 
-    final lengthGuidance = _lengthGuidanceFor(difficultyLevel);
+    final trimmedSummary = cumulativeSummary?.trim() ?? '';
+    final summarySection = trimmedSummary.isEmpty
+        ? "No cumulative learning summary yet - this is this learner's first "
+              'practice set (or none has been recorded yet).'
+        : 'Cumulative summary of everything this learner has practiced with '
+              'this language so far (topics, vocabulary, situations already '
+              'covered):\n$trimmedSummary';
+
+    final lengthGuidance = _lengthGuidanceForScore(difficultyScore);
 
     return _dedupe(
-      'generateDailySentenceSet:$trimmedTopic:${difficultyLevel ?? 'B1'}:${recentHistory.length}',
+      'generateDailySentenceSet:$trimmedTopic:${difficultyScore.toStringAsFixed(1)}:'
+      '${recentHistory.length}:${trimmedSummary.hashCode}',
       () async {
         final prompt = '''
 Planning today's practice set for a learner studying $targetLanguage
 (native: $nativeLanguage). Recent history, for context/continuity only:
 $historyText
 
+$summarySection
+
 $topicSection
 First, decide whether the suggested topic (if any) is a real, meaningful
 conversation topic - not empty, not gibberish, not a random string of
 characters or symbols. If there is no topic or it is not meaningful, silently
 invent a fresh, natural conversation topic yourself (avoid repeating recent
-history above); do not mention that you did this anywhere in the output. If
-it is meaningful, use it as the topic for the whole set.
+history AND the cumulative summary above); do not mention that you did this
+anywhere in the output. If it is meaningful, use it as the topic for the
+whole set - but even if it's the same topic the learner has suggested
+before, avoid repeating the same specific vocabulary, expressions, or
+conversational situation already covered in the cumulative summary; build a
+genuinely different scenario/angle around that topic instead.
 
 Write exactly 10 sentences forming ONE natural, connected conversation on
 that topic, alternating exercise type in this exact order: items 1, 3, 5, 7,
@@ -634,11 +674,85 @@ Return ONLY raw JSON, no markdown fences:
         _log(
           'generateDailySentenceSet: ${sentences.length} sentences generated '
           '(topic=${trimmedTopic.isEmpty ? 'random' : trimmedTopic}, '
-          'level=${difficultyLevel ?? 'B1'}, words=${sentences.map((s) => s.text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length).toList()})',
+          'difficultyScore=${difficultyScore.toStringAsFixed(1)}, '
+          'words=${sentences.map((s) => s.text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length).toList()})',
         );
         return SentenceQueue(generatedAt: DateTime.now(), sentences: sentences);
       },
     );
+  }
+
+  /// 하루치 학습 세션이 마감될 때(`HistoryService.finalizeSession` 참고) 그날
+  /// 완료한 [todayTurns]를 [existingSummary]와 합쳐 하나로 압축한 새 누적
+  /// 요약을 만든다. 매번 이어붙이지 않고 통째로 다시 압축·병합하므로 길이가
+  /// 무한정 늘어나지 않는다(대략 200단어 내외로 유지되도록 프롬프트에
+  /// 명시).
+  /// (When a day's learning session is finalized (see
+  /// `HistoryService.finalizeSession`), merges that day's completed
+  /// [todayTurns] with [existingSummary] into one freshly compressed
+  /// cumulative summary. Always recompresses/merges from scratch rather than
+  /// appending, so the length never grows unbounded - kept to roughly 200
+  /// words by prompt instruction.)
+  ///
+  /// `HistoryService.finalizeSession`이 그날 완료된 turn이 하나 이상 있을
+  /// 때만 호출하며(하루 1회), 결과를
+  /// `LearningSummaryService.writeCumulativeSummary`로 저장한다. 다음
+  /// [generateDailySentenceSet] 호출이 이 요약을 참고해 같은 주제/어휘/상황을
+  /// 반복하지 않도록 한다.
+  /// [existingSummary]: 이전까지 저장돼 있던 누적 요약(없으면 `null`).
+  /// [todayTurns]: 오늘 완료된(중복 제거된) 대화 turn 목록.
+  /// 반환값: 갱신된(압축·병합된) 누적 요약 텍스트.
+  /// 부작용: Gemini API에 네트워크 요청을 보낸다.
+  Future<String> updateLearningSummary({
+    required String? existingSummary,
+    required List<ConversationTurn> todayTurns,
+  }) async {
+    final apiKey = await _requireApiKey();
+    final config = await _configService.readConfig();
+    final nativeLanguage = config.nativeLanguage ?? 'the native language';
+    final targetLanguage = config.targetLanguage ?? 'the target language';
+
+    final todayText = todayTurns.isEmpty
+        ? '(nothing practiced today)'
+        : todayTurns
+              .map((t) {
+                final shown = t.type == ExerciseType.shadowing
+                    ? t.sentenceInTarget
+                    : t.sentenceInNative;
+                return '(${t.type.value}) ${shown ?? ''}';
+              })
+              .join('\n');
+
+    final trimmedExisting = existingSummary?.trim() ?? '';
+    final existingSection = trimmedExisting.isEmpty
+        ? 'There is no prior summary yet - this is the first entry.'
+        : 'Existing cumulative summary:\n$trimmedExisting';
+
+    return _dedupe('updateLearningSummary:${todayText.hashCode}:${trimmedExisting.hashCode}', () async {
+      final prompt = '''
+You maintain a running cumulative summary of everything a learner studying
+$targetLanguage (native: $nativeLanguage) has practiced so far, across every
+day of study - so future practice sets can avoid repeating the same topics,
+vocabulary, and conversational situations.
+
+$existingSection
+
+Today's newly completed sentences:
+$todayText
+
+Write an UPDATED cumulative summary that merges the existing summary with
+today's content into ONE summary. Do NOT simply append today's content to
+the old summary - compress and merge everything (old + new) from scratch so
+the result stays concise, roughly 200 words or fewer. Focus on what would
+help avoid repeating the same topics, vocabulary, expressions, or
+conversational situations in future sessions - not a diary of every
+sentence, just the recurring topics/vocabulary/situations a future prompt
+would need to know to steer away from repetition. Plain text only - no JSON,
+no markdown, no headers/bullet points.
+''';
+      final text = await _generateText(apiKey, prompt, label: 'updateLearningSummary');
+      return text.trim();
+    });
   }
 
   /// Grades a shadowing dictation attempt and, in the same call, returns a
@@ -1149,16 +1263,90 @@ Return ONLY raw JSON, no markdown fences:
 "accuracyPercent":0-100 estimate of how closely it matches the target sentence}
 ''';
       _log('analyzePronunciation: prompt ~${prompt.length} chars + audio ${audioBytes.length}B');
+      final base64Audio = base64Encode(audioBytes);
+      _logAudioDiagnostics(audioBytes, base64Audio);
       final decoded = await _generateContent(apiKey, [
         {'text': prompt},
         {
-          'inlineData': {'mimeType': 'audio/wav', 'data': base64Encode(audioBytes)},
+          'inlineData': {'mimeType': 'audio/wav', 'data': base64Audio},
         },
       ]);
       final text = _extractText(decoded);
       final json = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
       return PronunciationResult.fromJson(json);
     });
+  }
+
+  /// 진단용 헬퍼: [analyzePronunciation]이 오디오를 실제로 보내기 직전,
+  /// 페이로드 자체에 이상이 없는지 로그로 남긴다 — "500 에러가 서버가
+  /// 아니라 우리가 보내는 요청 자체의 문제일 수 있다"는 가설을 검증하기
+  /// 위함이다. 확인하는 것:
+  /// 1. [audioBytes]가 실제로 WAV 헤더(`RIFF`....`WAVE`)로 시작하는지 —
+  ///    `mimeType: 'audio/wav'`로 선언은 했지만 실제 바이트가 그렇지 않다면
+  ///    (예: 빈 파일, 다른 포맷, 헤더 손상) 여기서 바로 드러난다.
+  /// 2. 오디오 바이트 수가 비정상적으로 작은지(예: 1초 미만 녹음에 해당하는
+  ///    32,000바이트=16kHz*mono*16bit*1초 미만) — 너무 짧은/빈 녹음이
+  ///    서버 처리 실패로 이어질 수 있다는 가설을 확인하기 위함.
+  /// 3. base64 인코딩이 왕복(round-trip)에서 원본과 정확히 같은 바이트
+  ///    수로 디코딩되는지 — 인코딩 자체가 깨졌다면(이론상 `base64Encode`가
+  ///    이럴 일은 없지만, 방어적으로) 여기서 드러난다.
+  /// [audioBytes]: 실제로 전송할 원본 WAV 바이트.
+  /// [base64Audio]: [audioBytes]를 base64로 인코딩한 문자열(전송에 그대로
+  /// 쓰이는 값 — 로그를 위해 별도로 다시 인코딩하지 않는다).
+  void _logAudioDiagnostics(Uint8List audioBytes, String base64Audio) {
+    if (!kDebugMode) return;
+
+    final looksLikeWav =
+        audioBytes.length >= 12 &&
+        audioBytes[0] == 0x52 && // 'R'
+        audioBytes[1] == 0x49 && // 'I'
+        audioBytes[2] == 0x46 && // 'F'
+        audioBytes[3] == 0x46 && // 'F'
+        audioBytes[8] == 0x57 && // 'W'
+        audioBytes[9] == 0x41 && // 'A'
+        audioBytes[10] == 0x56 && // 'V'
+        audioBytes[11] == 0x45; // 'E'
+    final headerHex = audioBytes
+        .take(16)
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join(' ');
+
+    String roundTripStatus;
+    try {
+      final decodedLength = base64Decode(base64Audio).length;
+      roundTripStatus = decodedLength == audioBytes.length
+          ? 'OK ($decodedLength bytes)'
+          : 'MISMATCH (decoded $decodedLength bytes, expected ${audioBytes.length})';
+    } catch (e) {
+      roundTripStatus = 'FAILED TO DECODE: $e';
+    }
+
+    // 16kHz, mono, 16-bit PCM 기준 1초 = 32,000바이트 — 이보다 훨씬 작으면
+    // 거의 빈 녹음일 가능성이 높다.
+    final approxSeconds = audioBytes.length / 32000;
+
+    _log(
+      'analyzePronunciation audio diagnostics: '
+      'bytes=${audioBytes.length} (~${approxSeconds.toStringAsFixed(2)}s @16kHz/mono/16-bit), '
+      'looksLikeValidWavHeader=$looksLikeWav, '
+      'headerHexPrefix=[$headerHex], '
+      'base64Length=${base64Audio.length}, '
+      'base64RoundTrip=$roundTripStatus',
+    );
+    if (!looksLikeWav) {
+      _log(
+        'analyzePronunciation WARNING: audio bytes do NOT start with a valid '
+        "RIFF/WAVE header despite being declared as mimeType 'audio/wav' - "
+        'this alone could explain a server-side 500 (Gemini attempting to '
+        'parse invalid/garbage audio).',
+      );
+    }
+    if (audioBytes.length < 8000) {
+      _log(
+        'analyzePronunciation WARNING: audio payload is under ~0.25s '
+        '(${audioBytes.length}B) - likely an empty/near-empty recording.',
+      );
+    }
   }
 
   /// Synthesizes [text] to speech using [voice] (a name from
@@ -1353,9 +1541,20 @@ Return ONLY raw JSON, no markdown fences:
     final promptChars = parts
         .map((p) => (p['text'] as String?)?.length ?? 0)
         .fold<int>(0, (a, b) => a + b);
-    _log('$label -> ${model ?? _model} (~$promptChars prompt chars)');
+    final resolvedModel = model ?? _model;
+    _log('$label -> $resolvedModel (~$promptChars prompt chars)');
+    // 진단용: 실제로 요청 URL에 어느 모델명이 들어가는지 (API 키는 가려서)
+    // 명시적으로 남긴다 — 위 로그가 이미 같은 정보를 담고 있지만, "모델을
+    // 바꿨는데 요청은 여전히 옛 모델로 나가고 있는 것 아니냐"는 의심을
+    // URL 자체로 직접 확인할 수 있게 하기 위함이다(Hot Reload가 상수/필드
+    // 값을 완전히 갱신하지 못하는 경우가 있어, 코드는 바뀌었는데 실행 중인
+    // 인스턴스는 옛 값을 들고 있을 수 있다).
+    final uri = Uri.parse('$_baseUrl/$resolvedModel:generateContent?key=$apiKey');
+    _log('$label -> request URL: ${uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      'key': '<redacted>',
+    })}');
 
-    final uri = Uri.parse('$_baseUrl/${model ?? _model}:generateContent?key=$apiKey');
     late final http.Response response;
     try {
       response = await _client
@@ -1379,7 +1578,12 @@ Return ONLY raw JSON, no markdown fences:
     }
 
     if (response.statusCode != 200) {
+      // 진단용: 지금까지는 상태 코드만 로그로 남기고 실제 에러 본문(원인이
+      // 구체적으로 적혀 있는 JSON)은 버려지고 있었다 — 500 원인 분석에
+      // 필요한 가장 중요한 정보이므로 헤더와 함께 전체를 남긴다.
       _log('$label <- HTTP ${response.statusCode}');
+      _log('$label <- response headers: ${response.headers}');
+      _log('$label <- response body: ${response.body}');
       throw GeminiApiException(_reasonForStatusCode(response.statusCode), response.body);
     }
     _log('$label <- OK');

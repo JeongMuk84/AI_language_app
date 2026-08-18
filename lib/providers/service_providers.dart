@@ -4,9 +4,11 @@ import '../services/api_key_storage_service.dart';
 import '../services/config_service.dart';
 import '../services/conversation_history_service.dart';
 import '../services/day_boundary_service.dart';
+import '../services/difficulty_progression_service.dart';
 import '../services/gemini_service.dart';
 import '../services/handoff_service.dart';
 import '../services/history_service.dart';
+import '../services/learning_summary_service.dart';
 import '../services/listening_history_service.dart';
 import '../services/review_history_service.dart';
 import '../services/review_session_service.dart';
@@ -107,10 +109,37 @@ final conversationHistoryServiceProvider = Provider<ConversationHistoryService>(
   );
 });
 
+/// 특정 언어로 지금까지 학습한 내용을 압축해 누적한 요약(`LearningSummary`)을
+/// 읽고 쓰는 `LearningSummaryService`를 제공하는 provider.
+/// `storageLocationServiceProvider`와 `configServiceProvider`에 의존한다.
+/// `historyServiceProvider`(세션 마감 시 요약 갱신)와 `TopicInputDialog`
+/// (다음 세트 생성 시 참고 자료로 읽기)에서 사용된다.
+final learningSummaryServiceProvider = Provider<LearningSummaryService>((ref) {
+  return LearningSummaryService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    configService: ref.read(configServiceProvider),
+  );
+});
+
+/// 하루 10문장씩 1년에 걸쳐 점진적으로 오르는 난이도 진행 상태
+/// (`DifficultyProgression`)를 언어별로 읽고 쓰는
+/// `DifficultyProgressionService`를 제공하는 provider.
+/// `storageLocationServiceProvider`, `configServiceProvider`,
+/// `dayBoundaryServiceProvider`에 의존한다. `TopicInputDialog`가 오늘의
+/// 연속 난이도 점수를 계산하기 위해 사용한다.
+final difficultyProgressionServiceProvider = Provider<DifficultyProgressionService>((ref) {
+  return DifficultyProgressionService(
+    storageLocationService: ref.read(storageLocationServiceProvider),
+    configService: ref.read(configServiceProvider),
+    dayBoundaryService: ref.read(dayBoundaryServiceProvider),
+  );
+});
+
 /// 하루 학습 세션을 finalize(요약 저장)하고 이력 존재 여부를 판단하는
 /// `HistoryService`를 제공하는 provider. `sessionStateServiceProvider`,
 /// `conversationHistoryServiceProvider`, `storageLocationServiceProvider`,
-/// `dayBoundaryServiceProvider`를 의존성으로 주입받아 구성한다.
+/// `dayBoundaryServiceProvider`, `geminiServiceProvider`,
+/// `learningSummaryServiceProvider`를 의존성으로 주입받아 구성한다.
 /// `app_router.dart`(세션이 다른 날짜면 finalize, 마지막 exercise type
 /// 조회)와 `main.dart`의 reset 처리(`clearHistory`)에서 사용된다.
 final historyServiceProvider = Provider<HistoryService>((ref) {
@@ -119,6 +148,8 @@ final historyServiceProvider = Provider<HistoryService>((ref) {
     conversationHistoryService: ref.read(conversationHistoryServiceProvider),
     storageLocationService: ref.read(storageLocationServiceProvider),
     dayBoundaryService: ref.read(dayBoundaryServiceProvider),
+    geminiService: ref.read(geminiServiceProvider),
+    learningSummaryService: ref.read(learningSummaryServiceProvider),
   );
 });
 

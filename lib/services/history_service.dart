@@ -6,6 +6,8 @@ import '../models/exercise_type.dart';
 import '../models/history_summary.dart';
 import 'conversation_history_service.dart';
 import 'day_boundary_service.dart';
+import 'gemini_service.dart';
+import 'learning_summary_service.dart';
 import 'session_state_service.dart';
 import 'storage_location_service.dart';
 
@@ -30,15 +32,21 @@ class HistoryService {
     ConversationHistoryService? conversationHistoryService,
     StorageLocationService? storageLocationService,
     DayBoundaryService? dayBoundaryService,
+    GeminiService? geminiService,
+    LearningSummaryService? learningSummaryService,
   }) : _sessionStateService = sessionStateService ?? SessionStateService(),
        _conversationHistoryService = conversationHistoryService ?? ConversationHistoryService(),
        _storageLocationService = storageLocationService ?? StorageLocationService(),
-       _dayBoundaryService = dayBoundaryService ?? DayBoundaryService();
+       _dayBoundaryService = dayBoundaryService ?? DayBoundaryService(),
+       _geminiService = geminiService ?? GeminiService(),
+       _learningSummaryService = learningSummaryService ?? LearningSummaryService();
 
   final SessionStateService _sessionStateService;
   final ConversationHistoryService _conversationHistoryService;
   final StorageLocationService _storageLocationService;
   final DayBoundaryService _dayBoundaryService;
+  final GeminiService _geminiService;
+  final LearningSummaryService _learningSummaryService;
 
   /// history 파일들이 저장되는 `history` 디렉터리 핸들을 반환하고, 없으면
   /// 새로 만든다. 이 클래스의 다른 메서드들이 내부적으로 사용하는 헬퍼다.
@@ -143,7 +151,8 @@ class HistoryService {
   /// `app_router.dart`(자정이 지나 이전 날짜의 세션을 발견했을 때),
   /// `ShadowingViewModel`/`WritingViewModel`(세션 완료 처리 시)이 호출한다.
   /// 부작용: `SessionStateService`에서 세션 상태를 읽고, 비어있지 않으면
-  /// 날짜별 history 파일을 새로 쓰며, 세션 상태와 현재 언어의 대화
+  /// 날짜별 history 파일을 새로 쓰고 [_updateCumulativeLearningSummary]로
+  /// 누적 학습 요약을 갱신하며, 세션 상태와 현재 언어의 대화
   /// history(`ConversationHistoryService`)를 지운다.
   Future<void> finalizeSession() async {
     final session = await _sessionStateService.readState();
@@ -156,6 +165,8 @@ class HistoryService {
       final summary = _buildSummary(sessionDate: session.sessionStartedAt, turns: deduped);
       final file = await _fileForDate(session.sessionStartedAt);
       await file.writeAsString(jsonEncode(summary.toJson()));
+
+      await _updateCumulativeLearningSummary(deduped);
     }
 
     await _sessionStateService.clearSession();
@@ -169,6 +180,33 @@ class HistoryService {
     // 그대로 남겨두어, 같은 날 다시 그 언어로 돌아오면 이어서 재개할 수
     // 있게 한다(`ConversationHistoryService` 참고).)
     await _conversationHistoryService.clear();
+  }
+
+  /// 오늘 완료된 [turns]를 `LearningSummaryService`에 저장돼 있던 기존 누적
+  /// 요약과 합쳐, `GeminiService.updateLearningSummary`로 새로 압축·병합한
+  /// 요약을 만들고 저장한다 — 다음 `GeminiService.generateDailySentenceSet`
+  /// 호출이 같은 주제/어휘/상황을 반복하지 않도록 참고할 자료다.
+  /// [finalizeSession]이 그날 완료된 turn이 하나 이상 있을 때만 호출하므로,
+  /// 하루에 여러 번 세션이 끝나더라도(예: "학습 종료"를 여러 번 누른 경우)
+  /// 매번 다시 압축·병합될 뿐 무한정 이어붙여지지 않는다.
+  ///
+  /// Gemini 호출이 실패해도(네트워크 문제, 할당량 초과 등) 조용히
+  /// 건너뛴다 — 이 갱신은 어디까지나 부가 기능이라, 세션 마무리 자체(기록
+  /// 저장, 세션/대화 history 정리)를 절대 막아서는 안 되기 때문이다.
+  /// [turns]: 오늘 완료된(중복 제거된) 대화 turn 목록.
+  /// 부작용: Gemini API에 네트워크 요청을 보내고, 성공하면
+  /// `LearningSummaryService`에 갱신된 요약을 저장한다.
+  Future<void> _updateCumulativeLearningSummary(List<ConversationTurn> turns) async {
+    try {
+      final existing = await _learningSummaryService.readCumulativeSummary();
+      final updated = await _geminiService.updateLearningSummary(
+        existingSummary: existing,
+        todayTurns: turns,
+      );
+      await _learningSummaryService.writeCumulativeSummary(updated);
+    } catch (_) {
+      // Best-effort only — see doc comment above.
+    }
   }
 
   /// [turns] 목록을 `turnId` 기준으로 중복 제거한다 — 같은 `turnId`를 가진

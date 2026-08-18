@@ -69,6 +69,15 @@ String _canned10SentenceResponse(int wordCount) {
   return jsonEncode({'sentences': sentences});
 }
 
+/// Mirrors `GeminiService._lengthGuidanceForScore`'s word-count formula (0
+/// score -> 4 words, 100 score -> 25 words) so the test documents/verifies
+/// the continuous mapping without hardcoding numbers that would silently
+/// drift from the implementation.
+int _expectedWordTarget(double score) {
+  final clamped = score.clamp(0.0, 100.0);
+  return (4 + (clamped / 100) * 21).round();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -78,17 +87,19 @@ void main() {
     return dir;
   }
 
-  /// Verifies two things per CEFR level with a mocked Gemini response (no
-  /// live network/API key available in this environment):
-  /// 1. The actual prompt sent to Gemini varies its target word-count band
-  ///    by [difficultyLevel] — this is the fix for `generateNextSentence`
-  ///    never having referenced `difficultyLevel` at all.
-  /// 2. The response is parsed into a `SentenceQueue` correctly, and the
+  /// Verifies, with a mocked Gemini response (no live network/API key
+  /// available in this environment):
+  /// 1. The actual prompt sent to Gemini carries the exact continuous
+  ///    [difficultyScore] and the word-count target computed from it (the
+  ///    fix for length no longer being tied to only 6 discrete CEFR bands).
+  /// 2. [cumulativeSummary] (or its absence) is reflected in the prompt, so
+  ///    Gemini is actually told what to avoid repeating.
+  /// 3. The response is parsed into a `SentenceQueue` correctly, and the
   ///    per-sentence word counts (logged via `generateDailySentenceSet`'s
-  ///    debug log) come back distinct per level.
-  Future<void> runLevel({
-    required String difficultyLevel,
-    required String expectedWordBandInPrompt,
+  ///    debug log) come back as expected.
+  Future<void> runScore({
+    required double difficultyScore,
+    String? cumulativeSummary,
     required int cannedWordCount,
   }) async {
     final tempDir = await Directory.systemTemp.createTemp('gemini_daily_set_test');
@@ -96,11 +107,7 @@ void main() {
     addTearDown(() => tempDir.delete(recursive: true));
     final docDir = appDir(tempDir);
     File('${docDir.path}/config.json').writeAsStringSync(
-      jsonEncode({
-        'nativeLanguage': 'English',
-        'targetLanguage': 'Vietnamese',
-        'difficultyLevel': difficultyLevel,
-      }),
+      jsonEncode({'nativeLanguage': 'English', 'targetLanguage': 'Vietnamese'}),
     );
 
     String? capturedPrompt;
@@ -115,57 +122,79 @@ void main() {
     final gemini = GeminiService(
       client: mockClient,
       apiKeyStorage: _FakeApiKeyStorageService(),
-      configService: ConfigService(
-        storageLocationService: StorageLocationService(),
-      ),
+      configService: ConfigService(storageLocationService: StorageLocationService()),
     );
 
     final queue = await gemini.generateDailySentenceSet(
       topicInput: null,
       history: const <ConversationTurn>[],
-      difficultyLevel: difficultyLevel,
+      cumulativeSummary: cumulativeSummary,
+      difficultyScore: difficultyScore,
     );
 
-    expect(capturedPrompt, contains(expectedWordBandInPrompt));
-    expect(queue.sentences.length, 10);
+    final targetWords = _expectedWordTarget(difficultyScore);
+    expect(capturedPrompt, contains('Difficulty target: ${difficultyScore.toStringAsFixed(1)}/100'));
+    expect(capturedPrompt, contains('approximately $targetWords words per sentence'));
+    if (cumulativeSummary == null || cumulativeSummary.isEmpty) {
+      expect(capturedPrompt, contains('No cumulative learning summary yet'));
+    } else {
+      expect(capturedPrompt, contains(cumulativeSummary));
+    }
 
+    expect(queue.sentences.length, 10);
     final wordCounts = queue.sentences
         .map((s) => s.text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length)
         .toList();
     // ignore: avoid_print
-    print('[verify] difficultyLevel=$difficultyLevel -> word counts per sentence: $wordCounts');
+    print(
+      '[verify] difficultyScore=${difficultyScore.toStringAsFixed(1)} '
+      '(target ~$targetWords words) -> word counts per sentence: $wordCounts',
+    );
     expect(wordCounts, everyElement(cannedWordCount));
   }
 
-  test('generateDailySentenceSet: A1 prompt requests short sentences (4-7 words)', () async {
-    await runLevel(
-      difficultyLevel: 'A1',
-      expectedWordBandInPrompt: 'approximately 4-7 words',
-      cannedWordCount: 5,
-    );
+  test('generateDailySentenceSet: score 0 (brand new beginner) targets ~4 words', () async {
+    await runScore(difficultyScore: 0, cannedWordCount: 4);
   });
 
-  test('generateDailySentenceSet: B1 prompt requests mid-length sentences (9-14 words)', () async {
-    await runLevel(
-      difficultyLevel: 'B1',
-      expectedWordBandInPrompt: 'approximately 9-14 words',
-      cannedWordCount: 11,
-    );
+  test('generateDailySentenceSet: score 40 (B1-equivalent) targets ~12 words', () async {
+    await runScore(difficultyScore: 40, cannedWordCount: 12);
   });
 
-  test('generateDailySentenceSet: C1 prompt requests long sentences (15-22 words)', () async {
-    await runLevel(
-      difficultyLevel: 'C1',
-      expectedWordBandInPrompt: 'approximately 15-22 words',
-      cannedWordCount: 18,
-    );
+  test('generateDailySentenceSet: score 100 (master) targets ~25 words', () async {
+    await runScore(difficultyScore: 100, cannedWordCount: 25);
   });
 
-  test('generateDailySentenceSet: unrecognized level falls back to B1 band (9-14 words)', () async {
-    await runLevel(
-      difficultyLevel: 'not-a-real-level',
-      expectedWordBandInPrompt: 'approximately 9-14 words',
-      cannedWordCount: 11,
-    );
+  test(
+    'generateDailySentenceSet: intermediate scores (e.g. day-30/180 into progression) '
+    'produce distinct, continuously-increasing word targets',
+    () async {
+      final scores = [0.0, 24.7, 49.3, 73.6, 100.0];
+      final targets = scores.map(_expectedWordTarget).toList();
+      // ignore: avoid_print
+      print('[verify] score -> word target: ${Map.fromIterables(scores, targets)}');
+      // Strictly increasing - confirms the mapping is continuous, not a
+      // handful of hard-edged tiers that repeat the same target.
+      for (var i = 1; i < targets.length; i++) {
+        expect(targets[i], greaterThan(targets[i - 1]));
+      }
+    },
+  );
+
+  test('generateDailySentenceSet: no cumulative summary yet -> prompt says so explicitly', () async {
+    await runScore(difficultyScore: 40, cumulativeSummary: null, cannedWordCount: 12);
   });
+
+  test(
+    'generateDailySentenceSet: existing cumulative summary is passed through verbatim '
+    'so Gemini can avoid repeating it',
+    () async {
+      await runScore(
+        difficultyScore: 40,
+        cumulativeSummary:
+            'Learner has covered: ordering coffee, asking for directions, talking about the weather.',
+        cannedWordCount: 12,
+      );
+    },
+  );
 }

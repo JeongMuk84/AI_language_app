@@ -16,7 +16,10 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.3  #주제 선정 기능 추가, 난도 일정하게 유지 개선
+
+#version: 1.0.3  #주제 선정 기능 추가, 난도 일정하게 유지 개선
+#version: 1.0.4  #난도 1년(365일)에 맞게 상향곡석 그리도록 수정, 학습 종료 후 다음 학습 문장 10개 생성을 위한 인수인계 기능 강화.
+version: 1.0.5  #Key 재입력 시 10문장 새로 만들기 추가(기존에는 하루가 안지나 미리 만들어놓은 10문장 활용함)
 
 environment:
   sdk: ^3.12.2
