@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../constants/learning_constants.dart';
 import '../models/app_config.dart';
 import '../models/handoff_data.dart';
 import '../models/learning_session_snapshot.dart';
@@ -76,17 +77,32 @@ class SettingsViewModel extends Notifier<SettingsState> {
   /// SettingsDialog는 이를 받아 `RestartWidget.restartApp`으로 앱을
   /// 재시작시킨다.
   ///
-  /// 두 언어 중 하나라도 비어 있으면 아무 것도 저장하지 않고
-  /// [SettingsSaveResult.validationFailed]를 반환한다.
+  /// 두 언어 중 하나라도 비어 있거나, [dailyReviewCount]가 정수가 아니거나
+  /// [kMinDailyReviewCount] 미만이면 아무 것도 저장하지 않고
+  /// [SettingsSaveResult.validationFailed]를 반환한다. 저장된
+  /// `dailyReviewCount`는 다음 복습 세트 구성부터
+  /// (`ReviewSessionService.buildReviewSet`이 매번 config를 새로 읽으므로)
+  /// 바로 반영되며, 별도 재시작이 필요 없다.
   Future<SettingsSaveResult> save({
     required String nativeLanguage,
     required String targetLanguage,
     required AppThemeMode themeMode,
+    required String dailyReviewCount,
   }) async {
     final native = nativeLanguage.trim();
     final target = targetLanguage.trim();
     if (native.isEmpty || target.isEmpty) {
       state = state.copyWith(errorMessage: 'Please fill in both languages.');
+      return SettingsSaveResult.validationFailed;
+    }
+
+    // 입력 필드는 숫자만 받지만 그래도 방어한다: 비어 있거나 하한 미만이면
+    // 거부한다(어제 배운 묶음보다 작은 복습 세트는 만들 수 없다).
+    final reviewCount = int.tryParse(dailyReviewCount.trim());
+    if (reviewCount == null || reviewCount < kMinDailyReviewCount) {
+      state = state.copyWith(
+        errorMessage: 'Daily Review Count must be a whole number of at least $kMinDailyReviewCount.',
+      );
       return SettingsSaveResult.validationFailed;
     }
 
@@ -99,7 +115,11 @@ class SettingsViewModel extends Notifier<SettingsState> {
 
     if (!targetChanged) {
       await configService.updateConfig(
-        (c) => c.copyWith(nativeLanguage: native, targetLanguage: target),
+        (c) => c.copyWith(
+          nativeLanguage: native,
+          targetLanguage: target,
+          dailyReviewCount: reviewCount,
+        ),
       );
       // Persists themeMode to config.json AND updates the in-memory
       // provider so MaterialApp picks up the new theme immediately —
@@ -170,6 +190,7 @@ class SettingsViewModel extends Notifier<SettingsState> {
         nativeLanguage: native,
         targetLanguage: target,
         themeMode: themeMode.configValue,
+        dailyReviewCount: reviewCount,
       ),
     );
     // Keep the in-memory theme in sync too, in case anything renders in the

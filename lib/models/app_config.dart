@@ -1,3 +1,5 @@
+import '../constants/learning_constants.dart';
+
 /// 앱 문서 디렉토리의 `config.json`에 저장되는 로컬 앱 설정을 나타내는 모델.
 /// Gemini API 키는 여기 포함되지 않으며, 그 값은 `ApiKeyStorageService`를 통해
 /// `flutter_secure_storage`에 별도로 보관된다. `ConfigService.readConfig`가
@@ -15,6 +17,7 @@ class AppConfig {
     this.targetLanguage,
     this.difficultyLevel,
     this.themeMode,
+    this.dailyReviewCount,
   });
 
   /// `config.json`의 내용을 파싱해 [AppConfig]를 만든다.
@@ -25,6 +28,7 @@ class AppConfig {
       targetLanguage: json['targetLanguage'] as String?,
       difficultyLevel: json['difficultyLevel']?.toString(),
       themeMode: json['themeMode'] as String?,
+      dailyReviewCount: (json['dailyReviewCount'] as num?)?.toInt(),
     );
   }
 
@@ -44,6 +48,13 @@ class AppConfig {
   /// 사용자의) 설정 파일이면 `'black'`으로 취급된다.
   final String? themeMode;
 
+  /// 하루에 구성할 복습 문장 수(Settings의 "Daily Review Count"). 이 필드가
+  /// 없는 설정 파일이면 기본값 [kDefaultDailyReviewCount]로 취급되므로,
+  /// 실제 값은 [effectiveDailyReviewCount]로 읽을 것.
+  /// `ReviewSessionService.buildReviewSet`이 오늘의 복습 세트 크기를 정할
+  /// 때 사용한다.
+  final int? dailyReviewCount;
+
   /// [nativeLanguage]와 [targetLanguage]가 모두 채워져 있는지 나타낸다.
   /// `app_router.dart`의 리다이렉트 로직이 이 값으로 온보딩(언어 설정) 화면과
   /// 메인 화면 중 어디로 보낼지 게이팅한다.
@@ -58,6 +69,11 @@ class AppConfig {
   /// 쓰인다.
   String get effectiveThemeMode => themeMode == 'white' ? 'white' : 'black';
 
+  /// [dailyReviewCount]에 기본값([kDefaultDailyReviewCount])을 적용해 실제로
+  /// 쓸 복습 문장 수를 계산한다. `ReviewSessionService.buildReviewSet`이
+  /// 이 값을 오늘의 복습 세트 목표 크기로 삼는다.
+  int get effectiveDailyReviewCount => dailyReviewCount ?? kDefaultDailyReviewCount;
+
   /// `config.json`에 저장할 JSON 맵으로 직렬화한다. `ConfigService.writeConfig`
   /// 가 이 값을 파일에 쓴다. null인 필드는 아예 키를 생략한다.
   Map<String, dynamic> toJson() => {
@@ -65,6 +81,7 @@ class AppConfig {
         if (targetLanguage != null) 'targetLanguage': targetLanguage,
         if (difficultyLevel != null) 'difficultyLevel': difficultyLevel,
         if (themeMode != null) 'themeMode': themeMode,
+        if (dailyReviewCount != null) 'dailyReviewCount': dailyReviewCount,
       };
 
   /// 일부 필드만 바꾼 새 [AppConfig]를 만드는 불변(immutable) 갱신 메서드.
@@ -78,12 +95,14 @@ class AppConfig {
     String? difficultyLevel,
     bool clearDifficultyLevel = false,
     String? themeMode,
+    int? dailyReviewCount,
   }) {
     return AppConfig(
       nativeLanguage: nativeLanguage ?? this.nativeLanguage,
       targetLanguage: targetLanguage ?? this.targetLanguage,
       difficultyLevel: clearDifficultyLevel ? null : (difficultyLevel ?? this.difficultyLevel),
       themeMode: themeMode ?? this.themeMode,
+      dailyReviewCount: dailyReviewCount ?? this.dailyReviewCount,
     );
   }
 }

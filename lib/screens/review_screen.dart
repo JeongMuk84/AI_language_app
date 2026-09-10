@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../constants/learning_constants.dart';
 import '../providers/service_providers.dart';
 import '../router/app_router.dart';
+import '../theme/design_tokens.dart';
 import '../viewmodels/review_view_model.dart';
 import '../widgets/app_bar_with_settings.dart';
 import '../widgets/audio_play_button.dart';
@@ -78,10 +79,12 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 
   /// AudioRecorderWidget 녹음이 끝나면 호출된다.
-  /// [ReviewViewModel.analyzePronunciation]으로 녹음된 [bytes]를 분석
-  /// 요청으로 보낸다.
-  Future<void> _onRecordingComplete(Uint8List bytes) {
-    return ref.read(reviewViewModelProvider.notifier).analyzePronunciation(bytes);
+  /// [ReviewViewModel.analyzePronunciation]으로 녹음된 [bytes]와
+  /// [hasSpeechLikeAmplitude]를 분석 요청으로 보낸다.
+  Future<void> _onRecordingComplete(Uint8List bytes, {required bool hasSpeechLikeAmplitude}) {
+    return ref
+        .read(reviewViewModelProvider.notifier)
+        .analyzePronunciation(bytes, hasSpeechLikeAmplitude: hasSpeechLikeAmplitude);
   }
 
   /// "Next Sentence" / "Finish Review & Start Learning" 버튼이 눌리면
@@ -130,6 +133,28 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     context.go(route);
   }
 
+  /// [scaffold]를 감싸, `ReviewScreen`에서만 배경(Scaffold 본문 + AppBar)을
+  /// 다른 학습 화면과 살짝 다른 톤(`DesignColors.reviewBackgroundLight`/
+  /// `reviewBackgroundDark`)으로 바꿔 그린다 — 지금 복습 중인지 학습
+  /// 중인지 배경만으로 한눈에 구분되게 하기 위함이다. `colorScheme`은
+  /// 그대로 두므로(오직 `scaffoldBackgroundColor`/`appBarTheme.backgroundColor`
+  /// 만 override) 카드/버튼/입력창 등 다른 요소의 색상·대비 규칙은 전혀
+  /// 바뀌지 않는다. 로딩/에러/빈 목록/실제 문항, 리뷰 화면의 네 가지
+  /// 상태(build) 모두에 동일하게 적용해야 하므로 별도 헬퍼로 뺐다.
+  Widget _withReviewBackground(BuildContext context, Scaffold scaffold) {
+    final theme = Theme.of(context);
+    final reviewBackground = theme.brightness == Brightness.light
+        ? DesignColors.reviewBackgroundLight
+        : DesignColors.reviewBackgroundDark;
+    return Theme(
+      data: theme.copyWith(
+        scaffoldBackgroundColor: reviewBackground,
+        appBarTheme: theme.appBarTheme.copyWith(backgroundColor: reviewBackground),
+      ),
+      child: scaffold,
+    );
+  }
+
   /// [ReviewViewModel]을 watch해 리뷰 화면 UI를 그린다: 로딩/로드 에러/빈
   /// 목록(복습할 것 없음)/실제 문항(문장 재생, 번역 입력+채점, 발음
   /// 녹음+분석, 다음/건너뛰기 버튼)까지 리뷰 흐름의 각 단계를 담당한다.
@@ -146,32 +171,38 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     }
 
     if (state.isLoading) {
-      return Scaffold(
-        appBar: buildAppBarWithSettings(context, 'Review'),
-        body: const Center(child: CircularProgressIndicator()),
+      return _withReviewBackground(
+        context,
+        Scaffold(
+          appBar: buildAppBarWithSettings(context, 'Review'),
+          body: const Center(child: CircularProgressIndicator()),
+        ),
       );
     }
 
     if (state.loadError != null) {
-      return Scaffold(
-        appBar: buildAppBarWithSettings(context, 'Review'),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(state.loadError!, textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: () => ref.read(reviewViewModelProvider.notifier).loadReviewSet(),
-                  child: const Text('Retry'),
-                ),
-                const SizedBox(height: 12),
-                const ResetApiKeyButton(),
-                const SizedBox(height: 12),
-                OutlinedButton(onPressed: _skip, child: const Text('Skip Review & Start Learning')),
-              ],
+      return _withReviewBackground(
+        context,
+        Scaffold(
+          appBar: buildAppBarWithSettings(context, 'Review'),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(state.loadError!, textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: () => ref.read(reviewViewModelProvider.notifier).loadReviewSet(),
+                    child: const Text('Retry'),
+                  ),
+                  const SizedBox(height: 12),
+                  const ResetApiKeyButton(),
+                  const SizedBox(height: 12),
+                  OutlinedButton(onPressed: _skip, child: const Text('Skip Review & Start Learning')),
+                ],
+              ),
             ),
           ),
         ),
@@ -179,18 +210,21 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     }
 
     if (state.items.isEmpty || state.isExhausted) {
-      return Scaffold(
-        appBar: buildAppBarWithSettings(context, 'Review'),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Nothing to review right now.', textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                FilledButton(onPressed: _skip, child: const Text('Start Learning')),
-              ],
+      return _withReviewBackground(
+        context,
+        Scaffold(
+          appBar: buildAppBarWithSettings(context, 'Review'),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Nothing to review right now.', textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  FilledButton(onPressed: _skip, child: const Text('Start Learning')),
+                ],
+              ),
             ),
           ),
         ),
@@ -205,157 +239,192 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     final result = state.pronunciationResult;
     final passed = result != null && result.accuracyPercent >= kPronunciationPassThreshold;
 
-    return Scaffold(
-      appBar: buildAppBarWithSettings(
-        context,
-        'Review',
-        // 1-indexed, matching the "Today: X/Y" daily turn counter elsewhere —
-        // currentIndex is 0 while the first item is in progress, so this
-        // shows "1" for it rather than "0".
-        progressLabel: 'Reviewed: ${state.currentIndex + 1}/${state.items.length}',
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      item.sentenceInNative,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 24),
-                    Center(
-                      child: AudioPlayButton(
-                        key: ValueKey('play-${state.currentIndex}'),
-                        // Always enabled from screen entry — unlike
-                        // submission/pronunciation, there's no reason
-                        // hearing the sentence needs to wait on anything.
-                        // Cache-only — never falls back to a fresh TTS
-                        // call. `buildReviewSet` already guaranteed this
-                        // sentence has cached audio; if it's since gone
-                        // missing this returns null and the button shows
-                        // its own error state rather than synthesizing.
-                        audioLoader: () async {
-                          final config = await ref.read(configServiceProvider).readConfig();
-                          final hit = await ref
-                              .read(ttsCacheServiceProvider)
-                              .get(
-                                sentence: item.sentenceInTarget,
-                                language: config.targetLanguage ?? 'the target language',
-                              );
-                          if (hit == null) {
-                            throw StateError('No cached audio for this review sentence.');
-                          }
-                          return hit.audioBytes;
-                        },
-                        tooltip: 'Play sentence',
+    return _withReviewBackground(
+      context,
+      Scaffold(
+        // 진행 카운터는 여기서 AppBar `progressLabel`로 넣지 않는다: 두
+        // 부분("Reviewed: N / M" + "This sentence: N times")이 휴대폰에서는
+        // 한 줄에 안 들어가고, 높이가 고정된 AppBar는 둘째 줄을 만들 수 없다.
+        // 대신 스크롤되는 본문 맨 위에 두어(아래 `Wrap` 참고), 폭이 좁을 때
+        // 두 줄로 자연스럽게 줄바꿈되게 한다.
+        appBar: buildAppBarWithSettings(context, 'Review'),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 한 문자열로 붙이지 않고 독립된 두 조각을 `Wrap`으로
+                      // 배치한다: 넓은 창에서는 한 줄에(사이 간격은 `spacing`),
+                      // 좁은 휴대폰에서는 둘째 조각이 다음 줄로 내려간다. 절대
+                      // 잘리거나 말줄임(...) 처리되지 않는다. `labelMedium`을
+                      // 유지한다 — DESIGN.md 기준, AppBar 카운터가 쓰던 것과
+                      // 같은 크기다.
+                      // 1-indexed로, 다른 화면의 "Today: X/Y" 카운터와 맞춘다
+                      // (첫 문항 진행 중에는 currentIndex가 0). "This sentence"는
+                      // ReviewItem.reviewCount — 세트 생성 시점에 스냅샷된, 이번
+                      // 복습 *직전까지의* 누적 횟수라 문항이 바뀔 때마다 갱신된다.
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 12,
+                        runSpacing: 2,
+                        children: [
+                          Text(
+                            'Reviewed: ${state.currentIndex + 1} / ${state.items.length}',
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                          Text(
+                            'This sentence: ${item.reviewCount} '
+                            '${item.reviewCount == 1 ? 'time' : 'times'}',
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 24),
-                    TextField(
-                      controller: _controller,
-                      enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
-                      minLines: 1,
-                      maxLines: 3,
-                      textInputAction: TextInputAction.done,
-                      onChanged: _onTranslationChanged,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        hintText: 'Write the translation',
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: (state.isSubmittingTranslation || isTranslationCorrect)
-                          ? null
-                          : _submit,
-                      child: state.isSubmittingTranslation
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Submit'),
-                    ),
-                    if (state.translationWarning != null) ...[
-                      const SizedBox(height: 16),
-                      FeedbackBox(feedback: state.translationWarning!),
-                    ],
-                    if (state.translationError != null) ...[
                       const SizedBox(height: 16),
                       Text(
-                        state.translationError!,
-                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                        item.sentenceInNative,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
-                    ],
-                    if (state.translationResult != null) ...[
+                      const SizedBox(height: 24),
+                      Center(
+                        child: AudioPlayButton(
+                          key: ValueKey('play-${state.currentIndex}'),
+                          // Always enabled from screen entry — unlike
+                          // submission/pronunciation, there's no reason
+                          // hearing the sentence needs to wait on anything.
+                          // Cache-only — never falls back to a fresh TTS
+                          // call. `buildReviewSet` already guaranteed this
+                          // sentence has cached audio; if it's since gone
+                          // missing this returns null and the button shows
+                          // its own error state rather than synthesizing.
+                          audioLoader: () async {
+                            final config = await ref.read(configServiceProvider).readConfig();
+                            final hit = await ref
+                                .read(ttsCacheServiceProvider)
+                                .get(
+                                  sentence: item.sentenceInTarget,
+                                  language: config.targetLanguage ?? 'the target language',
+                                );
+                            if (hit == null) {
+                              throw StateError('No cached audio for this review sentence.');
+                            }
+                            return hit.audioBytes;
+                          },
+                          tooltip: 'Play sentence',
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      TextField(
+                        controller: _controller,
+                        enabled: !state.isSubmittingTranslation && !isTranslationCorrect,
+                        minLines: 1,
+                        maxLines: 3,
+                        textInputAction: TextInputAction.done,
+                        onChanged: _onTranslationChanged,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          hintText: 'Write the translation',
+                        ),
+                      ),
                       const SizedBox(height: 16),
-                      // Grading feedback only — deliberately never shows
-                      // the correct/model sentence itself (that used to be
-                      // `item.sentenceInTarget` here); the learner has to
-                      // recall it themselves.
-                      FeedbackBox(
-                        feedback: state.translationResult!.feedback,
-                        isCorrect: state.translationResult!.isCorrect,
-                        errors: state.translationResult!.errors,
+                      FilledButton(
+                        onPressed: (state.isSubmittingTranslation || isTranslationCorrect)
+                            ? null
+                            : _submit,
+                        child: state.isSubmittingTranslation
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Text('Submit'),
                       ),
-                    ],
-                    const SizedBox(height: 24),
-                    const Divider(),
-                    const SizedBox(height: 24),
-                    Center(
-                      child: AudioRecorderWidget(
-                        key: ValueKey('record-${state.currentIndex}'),
-                        // Always enabled from screen entry — see
-                        // AudioPlayButton above.
-                        onRecordingComplete: _onRecordingComplete,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    if (state.isAnalyzingPronunciation)
-                      const Center(child: CircularProgressIndicator())
-                    else ...[
-                      if (state.pronunciationError != null)
+                      if (state.translationWarning != null) ...[
+                        const SizedBox(height: 16),
+                        FeedbackBox(feedback: state.translationWarning!),
+                      ],
+                      if (state.translationError != null) ...[
+                        const SizedBox(height: 16),
                         Text(
-                          state.pronunciationError!,
+                          state.translationError!,
                           style: TextStyle(color: Theme.of(context).colorScheme.error),
                         ),
-                      if (result != null) ...[
-                        if (result.recognizedText.isNotEmpty) ...[
-                          Text('Recognized:', style: Theme.of(context).textTheme.labelSmall),
-                          const SizedBox(height: 4),
-                          Text(result.recognizedText, style: Theme.of(context).textTheme.bodyLarge),
-                          const SizedBox(height: 12),
-                        ],
+                      ],
+                      if (state.translationResult != null) ...[
+                        const SizedBox(height: 16),
+                        // Grading feedback only — deliberately never shows
+                        // the correct/model sentence itself (that used to be
+                        // `item.sentenceInTarget` here); the learner has to
+                        // recall it themselves.
                         FeedbackBox(
-                          feedback: result.feedback,
-                          isCorrect: passed,
-                          scorePercent: result.accuracyPercent,
+                          feedback: state.translationResult!.feedback,
+                          isCorrect: state.translationResult!.isCorrect,
+                          errors: state.translationResult!.errors,
                         ),
                       ],
+                      const SizedBox(height: 24),
+                      const Divider(),
+                      const SizedBox(height: 24),
+                      Center(
+                        child: AudioRecorderWidget(
+                          key: ValueKey('record-${state.currentIndex}'),
+                          // Always enabled from screen entry — see
+                          // AudioPlayButton above.
+                          onRecordingComplete: _onRecordingComplete,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      if (state.isAnalyzingPronunciation)
+                        const Center(child: CircularProgressIndicator())
+                      else ...[
+                        if (state.pronunciationError != null)
+                          Text(
+                            state.pronunciationError!,
+                            style: TextStyle(color: Theme.of(context).colorScheme.error),
+                          ),
+                        if (result != null) ...[
+                          Text('You said:', style: Theme.of(context).textTheme.labelSmall),
+                          const SizedBox(height: 4),
+                          // Never a blank line: an empty transcript means no
+                          // speech was heard.
+                          Text(
+                            result.recognizedText.isEmpty
+                                ? 'No speech was detected.'
+                                : result.recognizedText,
+                            style: Theme.of(context).textTheme.bodyLarge,
+                          ),
+                          const SizedBox(height: 12),
+                          FeedbackBox(
+                            feedback: result.feedback,
+                            isCorrect: passed,
+                            scorePercent: result.accuracyPercent,
+                          ),
+                        ],
+                      ],
+                      const SizedBox(height: 24),
+                      FilledButton(
+                        onPressed: state.canAdvance ? _advance : null,
+                        child: Text(
+                          state.isLastItem ? 'Finish Review & Start Learning' : 'Next Sentence',
+                        ),
+                      ),
                     ],
-                    const SizedBox(height: 24),
-                    FilledButton(
-                      onPressed: state.canAdvance ? _advance : null,
-                      child: Text(state.isLastItem ? 'Finish Review & Start Learning' : 'Next Sentence'),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: TextButton(
-                onPressed: _skip,
-                child: const Text('Skip Review & Start Learning'),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: TextButton(
+                  onPressed: _skip,
+                  child: const Text('Skip Review & Start Learning'),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

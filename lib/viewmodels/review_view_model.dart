@@ -308,9 +308,26 @@ class ReviewViewModel extends Notifier<ReviewState> {
   /// (이전에 있었다가 지금은 제거된 게이트와 달리) 번역을 먼저 제출해야
   /// 한다는 조건이 없으며, 이는 ReviewScreen에서 Play/Record가 화면
   /// 진입 시점부터 바로 사용 가능한 것과 일치한다.
-  Future<void> analyzePronunciation(Uint8List audioBytes) async {
+  ///
+  /// [hasSpeechLikeAmplitude]가 false면(녹음 전체에서 말소리로 볼 만한
+  /// 진폭이 한 번도 없었음) Gemini 호출 자체를 건너뛰고
+  /// `PronunciationResult.noSpeechDetected()`로 즉시 처리한다
+  /// (`AudioRecorderWidget.onRecordingComplete` 문서 참고).
+  Future<void> analyzePronunciation(
+    Uint8List audioBytes, {
+    required bool hasSpeechLikeAmplitude,
+  }) async {
     final item = state.currentItem;
     if (item == null) return;
+    if (!hasSpeechLikeAmplitude) {
+      state = state.copyWith(
+        isAnalyzingPronunciation: false,
+        clearPronunciationError: true,
+        pronunciationResult: PronunciationResult.noSpeechDetected(),
+      );
+      await _persistCurrentItemSnapshot();
+      return;
+    }
     state = state.copyWith(isAnalyzingPronunciation: true, clearPronunciationError: true);
     try {
       final result = await ref
@@ -369,7 +386,17 @@ class ReviewViewModel extends Notifier<ReviewState> {
   Future<String?> advance() async {
     final item = state.currentItem;
     if (item != null) {
-      await ref.read(reviewHistoryServiceProvider).markReviewed(item.sentenceInTarget);
+      final newCount = await ref
+          .read(reviewHistoryServiceProvider)
+          .markReviewed(item.sentenceInTarget);
+      // 어떤 문장의 복습 횟수가 은퇴 임계에 도달하는 순간, 그 문장을 TTS
+      // 캐시(오디오 파일 + manifest 항목)와 영구 복습 이력 양쪽에서 모두
+      // 지운다 — 캐시의 LRU eviction과는 별개인, 명시적 삭제 경로다. 이후로는
+      // `buildReviewSet`의 풀에도, `ListeningHistoryScreen`(캐시에 오디오가
+      // 남아있는 문장만 보여줌)에도 다시 나타날 수 없다.
+      if (newCount >= kReviewRetireThreshold) {
+        await _retireSentence(item.sentenceInTarget);
+      }
     }
 
     final sessionStateService = ref.read(sessionStateServiceProvider);
@@ -395,6 +422,20 @@ class ReviewViewModel extends Notifier<ReviewState> {
     );
     await _skipUnplayableItems();
     return AppRoutes.review;
+  }
+
+  /// 복습 횟수가 [kReviewRetireThreshold]회에 도달한 [sentenceInTarget]을
+  /// 캐시(`TtsCacheService.remove` — 오디오 파일 + manifest 항목)와 학습
+  /// 기록(`ReviewHistoryService.remove` — 레코드)에서 모두 제거한다.
+  /// `advance()`가 그 시점에 딱 한 번 호출한다. LRU eviction과는 별개의
+  /// 명시적 삭제 경로이며, 두 삭제는 서로 독립적으로 함께 동작한다.
+  Future<void> _retireSentence(String sentenceInTarget) async {
+    final config = await ref.read(configServiceProvider).readConfig();
+    final targetLanguage = config.targetLanguage ?? 'the target language';
+    await ref
+        .read(ttsCacheServiceProvider)
+        .remove(sentence: sentenceInTarget, language: targetLanguage);
+    await ref.read(reviewHistoryServiceProvider).remove(sentenceInTarget);
   }
 
   /// ReviewScreen의 "Skip Review & Start Learning" 버튼이 눌리면 호출된다.

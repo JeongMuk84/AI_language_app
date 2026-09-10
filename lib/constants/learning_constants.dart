@@ -23,6 +23,43 @@ const int kHistoryContextWindow = 6;
 /// 확인한다.
 const int kDailyTurnLimit = 10;
 
+/// 한 문장을 이만큼 복습하면(`ReviewScreen`에서 "Next Sentence"로 완료
+/// 처리되어 `reviewCount`가 이 값에 도달하면) 그 문장은 "충분히 익혔다"고
+/// 보고 그 즉시 TTS 캐시(오디오 파일 + manifest 항목)와 `ReviewHistoryService`
+/// 레코드에서 모두 제거된다 — 이후 `buildReviewSet`의 대상 풀에도,
+/// `ListeningHistoryScreen`(캐시에 남은 것만 표시)에도 다시 나타나지 않는다.
+/// 이는 TTS 캐시의 LRU eviction(용량 초과 시 오래된 것부터 밀려남)과는
+/// 별개인, 추가적인 명시적 삭제 경로다. `ReviewViewModel.advance`와
+/// `ReviewSessionService.buildReviewSet`이 참조한다.
+const int kReviewRetireThreshold = 7;
+
+/// config.json에 `dailyReviewCount`가 없을 때 쓰는 기본값. 이 필드가 없는
+/// (예: 이번 기능 이전에 만들어진) 설정 파일은 이 값으로 취급한다.
+/// `AppConfig.effectiveDailyReviewCount`와 `SettingsDialog`의 기본
+/// 입력값이 이 상수를 쓴다.
+const int kDefaultDailyReviewCount = 20;
+
+/// 사용자가 Settings의 "Daily Review Count"에 입력할 수 있는 최솟값.
+/// 어제 배운 [kDailyTurnLimit]문장조차 채우지 못하는 모순된 값을 막기
+/// 위해 [kDailyTurnLimit]과 같게 둔다. `SettingsViewModel.save`가 검증에
+/// 사용한다.
+const int kMinDailyReviewCount = kDailyTurnLimit;
+
+/// 언어별 TTS 캐시가 이 개수 "이상"이 되면, 그날부터 `buildReviewSet`이
+/// 평소 복습 세트 위에 "곧 지워질 만한"(복습 횟수가 높고 오래된) 문장을
+/// 추가로 덧붙여 하루 복습량을 늘린다 — 쌓인 캐시를 실제로 소진(7회 채워
+/// 삭제)시키기 위한 의도적 가속이다. 캐시가 다시 이 값 밑으로 내려가면
+/// 자동으로 평소 모드로 복귀한다. `kTtsCacheMaxEntries`(600)보다 10 작게
+/// 잡아, 상한에 닿기 전 마지막 구간에서 소진을 유도한다. `ReviewSessionService`와
+/// `SettingsDialog`가 참조한다.
+const int kReviewRampUpThreshold = 590;
+
+/// [kReviewRampUpThreshold]를 넘어선 캐시 초과분 1개당 그날 추가되는 복습
+/// 문장 수. 선형 비례라 590 근처에서는 소폭, 상한(600)에 가까울수록 더
+/// 많이 늘어난다(예: slope 2 → 캐시 595에서 +10문장, 600에서 +20문장).
+/// 소진 속도를 조절하는 튜닝 손잡이다 — `rampUpExtraCount` 참고.
+const int kReviewRampUpSlope = 2;
+
 /// "오늘 지금까지 완료한 턴 수"(0~[kDailyTurnLimit])를 AppBar에 표시할
 /// 값으로 변환한다 — "학습자가 지금 몇 번째 턴을 진행 중인가"를
 /// 1-indexed로 나타낸다(완료 0개 → "1" 표시, 즉 첫 문장이 진행 중이라는

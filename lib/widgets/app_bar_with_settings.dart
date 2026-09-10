@@ -19,6 +19,9 @@ import 'settings_icon_button.dart';
 /// 위젯(`Column` 같은)은 실제로 Flutter 프레임워크의
 /// `!semantics.parentDataDirty` 버그를 유발한 적이 있다(`HoldToResetButton`의
 /// 히스토리 참고) — 단순 `Text` 하나만 쓰면 이 위험을 완전히 피할 수 있다.
+/// 그래서 이 자리에는 한 줄에 들어가는 짧은 라벨만 넣는다: 두 부분으로
+/// 나뉘어 좁은 화면에서 줄바꿈이 필요한 카운터(`ReviewScreen` 참고)는
+/// 여기가 아니라 본문 상단에 `Wrap`으로 둔다.
 AppBar buildAppBarWithSettings(BuildContext context, String title, {String? progressLabel}) {
   return AppBar(
     title: Text(title),

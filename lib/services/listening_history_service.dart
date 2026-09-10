@@ -3,14 +3,15 @@ import 'config_service.dart';
 import 'review_history_service.dart';
 import 'tts_cache_service.dart';
 
-/// Max entries surfaced by [ListeningHistoryService.buildHistory]. Matches
-/// `TtsCacheService`'s own cap ([TtsCacheService] evicts LRU past 100
-/// entries), so this is really just documenting an existing ceiling rather
-/// than imposing a new one.
-/// ([ListeningHistoryService.buildHistory]가 보여주는 최대 항목 수.
-/// `TtsCacheService` 자체의 상한(100개를 넘으면 LRU로 evict함)과 일치하며,
-/// 새로운 제약을 추가한다기보다는 이미 존재하는 상한을 그대로 문서화한
-/// 값이다.)
+/// Max entries surfaced by [ListeningHistoryService.buildHistory]. The TTS
+/// cache itself holds up to `kTtsCacheMaxEntries` (600) clips per language
+/// (`TtsCacheService` evicts LRU past that), so this is a deliberately
+/// tighter display cap — only the 100 most-recently-learned playable
+/// sentences are listed, even though more may still have cached audio.
+/// ([ListeningHistoryService.buildHistory]가 보여주는 최대 항목 수. TTS
+/// 캐시 자체는 언어당 최대 `kTtsCacheMaxEntries`(600)개까지 보관하므로, 이
+/// 값은 그보다 좁은 표시 상한이다 — 캐시에 오디오가 남아있는 문장이 더
+/// 많더라도 가장 최근에 학습한 100개만 목록에 보여준다.)
 const int kMaxListeningHistorySize = 100;
 
 /// Builds the "Listening History" list — every previously-learned sentence

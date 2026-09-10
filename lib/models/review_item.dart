@@ -13,6 +13,7 @@ class ReviewItem {
     required this.sentenceInNative,
     this.cachedAudioPath,
     this.voiceUsed,
+    this.reviewCount = 0,
   });
 
   /// `ReviewProgress` 저장 파일 등에 담긴 항목 하나를 파싱해 [ReviewItem]을
@@ -23,6 +24,7 @@ class ReviewItem {
       sentenceInNative: json['sentenceInNative'] as String,
       cachedAudioPath: json['cachedAudioPath'] as String?,
       voiceUsed: json['voiceUsed'] as String?,
+      reviewCount: json['reviewCount'] as int? ?? 0,
     );
   }
 
@@ -40,6 +42,14 @@ class ReviewItem {
   /// [cachedAudioPath] 오디오를 생성할 때 사용된 TTS 음성.
   final String? voiceUsed;
 
+  /// 이 review set이 만들어진 시점까지 이 문장이 복습된 누적 횟수
+  /// (`ReviewRecord.reviewCount`를 그대로 복사한 값). `ReviewScreen`이 상단
+  /// "Reviewed: N/M" 옆에 "This sentence: k times"로 표시하는 데 쓴다.
+  /// 이번 세션에서 이 문항을 "Next Sentence"로 완료하면 그 시점에
+  /// `reviewCount`가 1 늘어나므로, 여기 담긴 값은 "지금 이 문장을 보기
+  /// 직전까지의" 횟수다.
+  final int reviewCount;
+
   /// [ReviewItem]을 JSON 맵으로 직렬화한다. `ReviewProgress.toJson`이
   /// `reviewItemList`를 저장할 때 사용한다.
   Map<String, dynamic> toJson() => {
@@ -47,5 +57,6 @@ class ReviewItem {
         'sentenceInNative': sentenceInNative,
         if (cachedAudioPath != null) 'cachedAudioPath': cachedAudioPath,
         if (voiceUsed != null) 'voiceUsed': voiceUsed,
+        'reviewCount': reviewCount,
       };
 }

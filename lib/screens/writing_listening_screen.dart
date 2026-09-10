@@ -43,10 +43,12 @@ class _WritingListeningScreenState extends ConsumerState<WritingListeningScreen>
   }
 
   /// AudioRecorderWidget 녹음이 끝나면 호출된다.
-  /// [WritingViewModel.analyzePronunciation]으로 녹음된 [bytes]를 분석
-  /// 요청으로 보낸다.
-  Future<void> _onRecordingComplete(Uint8List bytes) {
-    return ref.read(writingViewModelProvider.notifier).analyzePronunciation(bytes);
+  /// [WritingViewModel.analyzePronunciation]으로 녹음된 [bytes]와
+  /// [hasSpeechLikeAmplitude]를 분석 요청으로 보낸다.
+  Future<void> _onRecordingComplete(Uint8List bytes, {required bool hasSpeechLikeAmplitude}) {
+    return ref
+        .read(writingViewModelProvider.notifier)
+        .analyzePronunciation(bytes, hasSpeechLikeAmplitude: hasSpeechLikeAmplitude);
   }
 
   /// "Try Again" 버튼이 눌리면 호출된다.
@@ -172,15 +174,19 @@ class _WritingListeningScreenState extends ConsumerState<WritingListeningScreen>
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 if (result != null) ...[
-                  if (result.recognizedText.isNotEmpty) ...[
-                    Text('Recognized:', style: Theme.of(context).textTheme.labelSmall),
-                    const SizedBox(height: 4),
-                    // Target-language transcript of what was actually
-                    // heard — never translated, so the learner can see
-                    // exactly what their pronunciation sounded like.
-                    Text(result.recognizedText, style: Theme.of(context).textTheme.bodyLarge),
-                    const SizedBox(height: 12),
-                  ],
+                  Text('You said:', style: Theme.of(context).textTheme.labelSmall),
+                  const SizedBox(height: 4),
+                  // Target-language transcript of what was actually heard
+                  // — never translated, so the learner can see exactly
+                  // what their pronunciation sounded like. Never a blank
+                  // line: an empty transcript means no speech was heard.
+                  Text(
+                    result.recognizedText.isEmpty
+                        ? 'No speech was detected.'
+                        : result.recognizedText,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                  const SizedBox(height: 12),
                   // `feedback` already comes back from Gemini in the
                   // learner's native language, including retry guidance
                   // when below kPronunciationPassThreshold — no English

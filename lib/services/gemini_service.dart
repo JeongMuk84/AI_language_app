@@ -1214,6 +1214,15 @@ Return ONLY raw JSON, no markdown fences:
   /// (녹음된 발음 시도를 [targetSentence]와 비교하도록 Gemini의 멀티모달
   /// 분석에 보낸다.)
   ///
+  /// 채점을 오디오와 원문을 직접 비교하는 한 단계로 시키지 않고, 프롬프트가
+  /// 명시적으로 두 단계로 나눠 시킨다: (1) 원문을 참고하지 않고 오디오만
+  /// 듣고 있는 그대로 전사(`recognizedText`) — 무음/잡음뿐이면
+  /// `noSpeechDetected: true` + 빈 문자열, (2) 그 전사 결과와 원문을
+  /// 텍스트로 비교해 `matchPercentage` 계산. 원문을 그대로 돌려주는 것은
+  /// 프롬프트에서 명시적으로 금지한다 — 그렇게 하면 무음/오발음이 들어와도
+  /// "원문과 비교해서 대충 맞다"는 식으로 판정되어 버려 정합률이 실제
+  /// 발화 내용과 무관해지기 때문이다(이번 수정의 계기가 된 버그).
+  ///
   /// `ReviewViewModel.analyzePronunciation`, `ShadowingViewModel`,
   /// `WritingViewModel`이 각각 review/shadowing/writing 화면에서 사용자가
   /// 발음 녹음을 마쳤을 때 호출하며, `review_screen.dart`,
@@ -1241,26 +1250,48 @@ Return ONLY raw JSON, no markdown fences:
     return _dedupe('analyzePronunciation:$targetSentence:${audioBytes.length}', () async {
       final apiKey = await _requireApiKey();
       final prompt = '''
-Learner recorded themselves saying this $targetLanguage sentence aloud:
+Learner attempted to say this $targetLanguage sentence aloud:
 "$targetSentence"
-Listen to the recording, transcribe what they actually said, and assess how
-closely it matches the target sentence.
+
+Do this in two SEPARATE steps - do not skip straight to scoring:
+
+STEP 1 - Transcribe blind. Listen to the recording and write down exactly
+what you actually hear, as a plain speech-to-text transcriber would, with
+no bias toward the target sentence's wording. If the learner skipped a
+word, substituted a different word, mispronounced something into something
+else, or said nothing at all, the transcript must reflect that faithfully -
+do NOT "correct" or "smooth" it toward the target sentence. Returning the
+target sentence verbatim as "recognizedText" is strictly forbidden UNLESS
+that is genuinely, word-for-word, what you heard - silently falling back to
+the target sentence defeats the entire purpose of this field.
+If the recording contains no discernible speech at all (silence, only
+background noise/static, or other non-speech sound), set
+"noSpeechDetected": true, "recognizedText": "" (empty string), and
+"matchPercentage": 0, and skip STEP 2 below entirely.
+
+STEP 2 - Only now compare. Score how closely the STEP 1 transcript you just
+wrote (not the raw audio, not the target sentence's audio you imagine it
+should sound like) matches the target sentence's wording, as a 0-100
+percentage in "matchPercentage".
 
 Field-by-field language rules (do not mix these up):
-- "recognizedText": transcribe exactly what you heard, written in
-  $targetLanguage - the language they were speaking. Do NOT translate it
-  into $nativeLanguage; the learner needs to see what their pronunciation
-  actually sounded like, in the language they were practicing.
+- "recognizedText": the STEP 1 transcript, written in $targetLanguage - the
+  language they were speaking. Do NOT translate it into $nativeLanguage;
+  the learner needs to see what their pronunciation actually sounded like,
+  in the language they were practicing.
 - "feedback": your assessment/notes, written in $nativeLanguage (the
   learner's native language), not English unless $nativeLanguage is
-  English. If accuracyPercent is below $kPronunciationPassThreshold,
-  briefly and encouragingly note (still in $nativeLanguage) that they
-  should try again; otherwise don't mention the threshold at all.
+  English. If noSpeechDetected is true, briefly note (in $nativeLanguage)
+  that no speech was heard and they should try again. Otherwise, if
+  matchPercentage is below $kPronunciationPassThreshold, briefly and
+  encouragingly note (still in $nativeLanguage) that they should try again;
+  if at or above it, don't mention the threshold at all.
 
 Return ONLY raw JSON, no markdown fences:
-{"recognizedText":"...in $targetLanguage, transcribing what you heard",
-"feedback":"a few sentences in $nativeLanguage on pronunciation notes",
-"accuracyPercent":0-100 estimate of how closely it matches the target sentence}
+{"recognizedText":"...in $targetLanguage, the STEP 1 transcript verbatim (empty string if no speech)",
+"noSpeechDetected":true or false,
+"matchPercentage":0-100 from STEP 2 (must be 0 if noSpeechDetected is true),
+"feedback":"a few sentences in $nativeLanguage on pronunciation notes"}
 ''';
       _log('analyzePronunciation: prompt ~${prompt.length} chars + audio ${audioBytes.length}B');
       final base64Audio = base64Encode(audioBytes);
@@ -1273,7 +1304,13 @@ Return ONLY raw JSON, no markdown fences:
       ]);
       final text = _extractText(decoded);
       final json = jsonDecode(_stripCodeFences(text)) as Map<String, dynamic>;
-      return PronunciationResult.fromJson(json);
+      final result = PronunciationResult.fromJson(json);
+      _log(
+        'analyzePronunciation <- noSpeechDetected=${json['noSpeechDetected']}, '
+        'recognizedText="${result.recognizedText}", '
+        'matchPercentage=${result.accuracyPercent}',
+      );
+      return result;
     });
   }
 

@@ -36,6 +36,8 @@ colors:
   canvas: "#ffffff"
   surface: "#f6f5f4"
   surface-soft: "#fafaf9"
+  review-background-light: "#e9e7e3"
+  review-background-dark: "#1c1c1c"
   hairline: "#e5e3df"
   hairline-soft: "#ede9e4"
   hairline-strong: "#c8c4be"
@@ -504,6 +506,8 @@ The system uses a Notion-Sans typeface (Inter-based) across every UI surface —
 - **Canvas White** ({colors.canvas}): Page background and primary card surface
 - **Surface** ({colors.surface}): Subtle section backgrounds, search-pill rest, featured pricing tier
 - **Surface Soft** ({colors.surface-soft}): Quieter section divisions
+- **Review Background Light** ({colors.review-background-light}): App-only token (not from the source page audit) — spaced-review screen's page background in the white theme. Bumped a step darker after the first pass (`#f0efec`) read as barely distinguishable from `{colors.canvas}`; now sits near `{colors.hairline}` for a clearly felt difference, while staying darker than `{colors.surface}` so cards still read as lighter/elevated.
+- **Review Background Dark** ({colors.review-background-dark}): App-only token, dark-theme counterpart — spaced-review screen's page background in the black theme. Bumped a step lighter after the first pass (`#121212`) read as barely distinguishable from the dark theme's pure-black scaffold; now sits close to the dark theme's card surface (`{colors.ink}`, #1a1a1a) for a clearly felt difference from pure black — the tradeoff is cards no longer read as clearly elevated against it.
 - **Hairline** ({colors.hairline}): 1px borders and primary dividers
 - **Hairline Soft** ({colors.hairline-soft}): Quieter dividers
 - **Hairline Strong** ({colors.hairline-strong}): Stronger 1px border for inputs

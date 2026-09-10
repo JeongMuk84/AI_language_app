@@ -133,14 +133,35 @@ class ReviewHistoryService {
   /// [sentenceInTarget]: 방금 복습을 마친 대상 언어 문장(레코드 키).
   /// 부작용: 해당 레코드가 존재하면 review_history.json을 갱신한다. 레코드가
   /// 없으면 아무 일도 하지 않는다.
-  Future<void> markReviewed(String sentenceInTarget) async {
+  /// 반환값: 갱신 후의 `reviewCount`(1 증가된 값). 레코드가 없었으면 `0`.
+  /// 호출자(`ReviewViewModel.advance`)는 이 값이 `kReviewRetireThreshold`에
+  /// 도달했는지로 그 문장을 캐시·이력에서 은퇴시킬지 판단한다.
+  Future<int> markReviewed(String sentenceInTarget) async {
     final raw = await _readRaw();
     final entry = raw[sentenceInTarget] as Map<String, dynamic>?;
-    if (entry == null) return;
+    if (entry == null) return 0;
     final record = ReviewRecord.fromJson(entry);
+    final newCount = record.reviewCount + 1;
     raw[sentenceInTarget] = record
-        .copyWith(lastReviewedAt: DateTime.now(), reviewCount: record.reviewCount + 1)
+        .copyWith(lastReviewedAt: DateTime.now(), reviewCount: newCount)
         .toJson();
+    await _writeRaw(raw);
+    return newCount;
+  }
+
+  /// Permanently drops [sentenceInTarget]'s record from
+  /// `review_history.json`. Called by `ReviewViewModel.advance` (alongside
+  /// `TtsCacheService.remove`) once a sentence's `reviewCount` reaches
+  /// `kReviewRetireThreshold` — it's been reviewed enough, so it must not
+  /// stay in the review-selection pool (`ReviewSessionService.buildReviewSet`)
+  /// any longer.
+  /// ([sentenceInTarget]의 레코드를 review_history.json에서 완전히 제거한다.)
+  /// [sentenceInTarget]: 제거할 대상 언어 문장(레코드 키).
+  /// 부작용: 레코드가 있으면 review_history.json을 갱신한다. 없으면 아무
+  /// 일도 하지 않는다.
+  Future<void> remove(String sentenceInTarget) async {
+    final raw = await _readRaw();
+    if (raw.remove(sentenceInTarget) == null) return;
     await _writeRaw(raw);
   }
 

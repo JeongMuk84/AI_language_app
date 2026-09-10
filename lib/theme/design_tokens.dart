@@ -14,6 +14,24 @@ abstract final class DesignColors {
   static const canvas = Color(0xFFFFFFFF);
   static const surface = Color(0xFFF6F5F4);
   static const surfaceSoft = Color(0xFFFAFAF9);
+
+  /// `ReviewScreen`에만 쓰이는 배경색(white 테마) — `canvas`보다 어둡게
+  /// 잡아, 지금 복습 중인지 학습 중인지 배경만으로 구분되게 한다. 최초
+  /// 버전(`#F0EFEC`)은 `canvas`와의 차이가 거의 느껴지지 않는다는 피드백을
+  /// 받아, `hairline`(#E5E3DF, 1px 테두리색)에 가까운 톤까지 한 단계 더
+  /// 어둡게 내렸다 — `surface`(#F6F5F4, 카드/입력창 배경)보다는 여전히
+  /// 확실히 어두워서 카드가 배경에 묻히지 않는다.
+  static const reviewBackgroundLight = Color(0xFFE9E7E3);
+
+  /// `ReviewScreen`에만 쓰이는 배경색(black 테마) — `inkDeep`(순검정,
+  /// #000000)보다 밝게 잡아 구분되게 한다. 최초 버전(`#121212`)은
+  /// `inkDeep`과의 차이가 거의 느껴지지 않는다는 피드백을 받아, 카드에
+  /// 쓰이는 `ink`(#1A1A1A)와 거의 같은 밝기까지 한 단계 더 올렸다 — 순검정
+  /// 대비 체감 차이를 카드 밝기 수준까지 끌어올리는 것을 우선했고, 그
+  /// 결과 카드가 배경보다 아주 살짝만 더 밝거나 사실상 비슷해져 이전만큼
+  /// "카드가 도드라져 보이는" 효과는 약해졌다(실사용 확인 필요).
+  static const reviewBackgroundDark = Color(0xFF1C1C1C);
+
   static const hairline = Color(0xFFE5E3DF);
   static const hairlineSoft = Color(0xFFEDE9E4);
   static const hairlineStrong = Color(0xFFC8C4BE);

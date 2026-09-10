@@ -1,25 +1,42 @@
 import 'dart:math';
 
+import '../constants/learning_constants.dart';
 import '../models/review_item.dart';
 import '../models/review_record.dart';
 import 'config_service.dart';
 import 'review_history_service.dart';
 import 'tts_cache_service.dart';
 
-/// Max sentences in a single review set. Below this, every reviewable
-/// sentence (one with cached audio) is included; above it, a mix of
-/// recently-learned and overdue-for-review sentences is selected instead
-/// (see `buildReviewSet`).
-/// (한 번의 review set에 들어가는 최대 문장 수. 이 값 이하이면 복습 가능한
-/// (캐시된 오디오가 있는) 모든 문장이 포함되고, 이보다 많으면 최근 학습한
-/// 문장과 복습이 밀린 문장을 섞어서 선택한다([buildReviewSet] 참고).)
-const int kMaxReviewSetSize = 15;
-/// [ReviewSessionService.buildReviewSet]에서 풀이 [kMaxReviewSetSize]를
-/// 초과할 때, 최근에 처음 학습한 순으로 무조건 포함시키는 문장 개수.
-const int _recentCount = 10;
-/// [_recentCount]를 채운 나머지를, 복습이 밀린 정도에 가중치를 둔 무작위
-/// 추출로 채우는 개수(`kMaxReviewSetSize - _recentCount`).
-const int _randomCount = kMaxReviewSetSize - _recentCount;
+/// Number of the most-recently-*first-learned* sentences that are always
+/// included in a review set when the pool is larger than the target size —
+/// i.e. "yesterday's batch" (`kDailyTurnLimit` sentences a day). The rest of
+/// the target size is filled at random from the remainder.
+/// (풀이 목표 개수보다 클 때, "처음 학습한" 시점이 가장 최근인 순으로
+/// 무조건 포함시키는 문장 개수 — 사실상 "어제 배운 한 묶음"
+/// ([kDailyTurnLimit]문장/일)이다. 목표 개수의 나머지는 그 외 문장들에서
+/// 무작위로 채운다.)
+const int kYesterdayLearnedCount = kDailyTurnLimit;
+
+/// How many EXTRA review sentences to append today for a given live TTS
+/// cache count, on top of the usual `dailyReviewCount` set.
+///
+/// Zero until the cache reaches [kReviewRampUpThreshold]; above it, grows
+/// linearly with the overshoot ([kReviewRampUpSlope] per cached sentence
+/// over the threshold) so it ramps gently near the threshold and harder as
+/// the cache nears its [kTtsCacheMaxEntries] cap. No upper clamp — the LRU
+/// cap bounds the cache, so this is bounded in practice at
+/// `(kTtsCacheMaxEntries - kReviewRampUpThreshold) * kReviewRampUpSlope`.
+/// The whole point is to deliberately drain a nearly-full cache by
+/// reviewing its most-worn sentences up to [kReviewRetireThreshold] (which
+/// deletes them); once enough drain out and the count drops back below the
+/// threshold this returns 0 again, so daily volume rises and falls on its
+/// own with the cache.
+/// (`buildReviewSet`이 평소 세트에 덧붙일 추가 문장 수. 캐시가
+/// [kReviewRampUpThreshold] 미만이면 0, 이상이면 초과분에 선형 비례.)
+int rampUpExtraCount(int cacheCount) {
+  if (cacheCount < kReviewRampUpThreshold) return 0;
+  return (cacheCount - kReviewRampUpThreshold) * kReviewRampUpSlope;
+}
 
 /// Picks which sentences to review, from the durable learning record in
 /// `ReviewHistoryService` — filtered to only ones the TTS cache still has
@@ -52,24 +69,46 @@ class ReviewSessionService {
 
   final Random _random = Random();
 
-  /// Builds today's review set:
-  /// - Pool <= [kMaxReviewSetSize]: every reviewable sentence.
-  /// - Pool > [kMaxReviewSetSize]: the [_recentCount] most recently
-  ///   *first learned* (not most recently reviewed — this surfaces what
-  ///   was just learned, not what was just reviewed) + [_randomCount]
-  ///   more picked at random from the rest, weighted toward sentences that
-  ///   haven't been reviewed in a while (or ever).
+  /// Builds today's review set. Base target size is the CURRENT config's
+  /// `dailyReviewCount` (`AppConfig.effectiveDailyReviewCount`, default
+  /// [kDefaultDailyReviewCount]); when the live per-language TTS cache count
+  /// is at/above [kReviewRampUpThreshold], [rampUpExtraCount] more are
+  /// appended (see below).
+  ///
+  /// The pool is every reviewable sentence — one that (a) still has cached
+  /// TTS audio and (b) hasn't yet been reviewed [kReviewRetireThreshold]
+  /// times (a sentence that reached that count is deleted from the cache
+  /// and history by `ReviewViewModel.advance`; this `< kReviewRetireThreshold`
+  /// filter is just belt-and-suspenders for a record that slipped through).
+  ///
+  /// Normal selection from that pool ([_selectNormal]):
+  /// - Pool <= target: every reviewable sentence.
+  /// - target <= [kYesterdayLearnedCount]: no random fill — just the
+  ///   `target` most-recently-*first-learned* sentences.
+  /// - Pool > target > [kYesterdayLearnedCount]: the
+  ///   [kYesterdayLearnedCount] most recently *first learned* (not most
+  ///   recently reviewed — this surfaces what was just learned) + the
+  ///   remaining `target - kYesterdayLearnedCount` picked at random from
+  ///   the rest, weighted toward sentences that haven't been reviewed in a
+  ///   while (or ever).
+  ///
+  /// Ramp-up (cache >= [kReviewRampUpThreshold]): after normal selection,
+  /// [rampUpExtraCount] more are taken from the still-unselected pool,
+  /// ordered by MOST-reviewed first (closest to [kReviewRetireThreshold]),
+  /// ties broken by oldest `firstLearnedAt` — i.e. the sentences most
+  /// likely to be retired soon, so powering through the set actively drains
+  /// the cache. These extras run through the exact same review flow; they're
+  /// just mixed into the set. Below the threshold nothing extra is added and
+  /// the set is the plain `dailyReviewCount` size again.
+  ///
   /// Returns an empty list if there's nothing reviewable — the caller
   /// should skip straight to a new learning session in that case.
-  /// (오늘의 review set을 만든다:
-  /// - 풀이 [kMaxReviewSetSize] 이하이면: 복습 가능한 모든 문장.
-  /// - 풀이 [kMaxReviewSetSize]를 초과하면: *처음 학습한* 시점이 가장 최근인
-  ///   [_recentCount]개(가장 최근에 "복습한" 것이 아니라 - 방금 새로 배운
-  ///   것을 보여주기 위함) + 나머지 중에서 무작위로 뽑은 [_randomCount]개
-  ///   (오랫동안 - 혹은 한 번도 - 복습되지 않은 문장에 가중치를 둠)를
-  ///   합친다.
-  /// 복습할 것이 없으면 빈 리스트를 반환한다 — 이 경우 호출자는 곧바로
-  /// 새 학습 세션으로 넘어가야 한다.)
+  /// (오늘의 review set을 만든다. 기본 목표 개수는 현재 config의
+  /// `dailyReviewCount`이며, 언어별 TTS 캐시 개수가 [kReviewRampUpThreshold]
+  /// 이상이면 [rampUpExtraCount]만큼 문장을 더 덧붙인다 — 추가분은 아직
+  /// 뽑히지 않은 풀에서 "복습을 많이 한(7회에 가까운) 순, 동률이면 오래된
+  /// 순"으로 골라, 곧 삭제될 문장을 밀어 캐시를 실제로 소진시킨다. 캐시가
+  /// 다시 임계 밑으로 내려가면 자동으로 평소 크기로 돌아온다.)
   ///
   /// `app_router.dart`가 라우팅 리다이렉트 판단에서 "복습할 게 있는지"를
   /// 확인할 때, `ReviewViewModel`이 복습 화면에서 실제로 보여줄 문항 목록을
@@ -78,10 +117,12 @@ class ReviewSessionService {
   Future<List<ReviewItem>> buildReviewSet() async {
     final config = await _configService.readConfig();
     final targetLanguage = config.targetLanguage ?? 'the target language';
+    final baseTarget = config.effectiveDailyReviewCount;
     final allRecords = await _reviewHistoryService.readAll();
 
     final reviewable = <_PoolEntry>[];
     for (final record in allRecords) {
+      if (record.reviewCount >= kReviewRetireThreshold) continue;
       final location = await _ttsCacheService.peek(
         sentence: record.sentenceInTarget,
         language: targetLanguage,
@@ -92,14 +133,52 @@ class ReviewSessionService {
     }
 
     if (reviewable.isEmpty) return const [];
-    if (reviewable.length <= kMaxReviewSetSize) {
-      return reviewable.map((e) => e.toItem()).toList();
+
+    final normal = _selectNormal(reviewable, baseTarget);
+
+    // 램프업: 이 언어 캐시가 거의 가득 차면, 복습을 가장 많이 한(reviewCount가
+    // 높은) 오래된 문장을 일부러 더 얹어 캐시를 다시 끌어내린다. 매 빌드마다
+    // 실시간 개수를 읽으므로, 별도 모드 플래그 없이 하루 복습량이 캐시를 따라
+    // 늘었다 줄었다 한다.
+    final cacheCount = await _ttsCacheService.count();
+    final extraCount = rampUpExtraCount(cacheCount);
+    final extras = <_PoolEntry>[];
+    if (extraCount > 0) {
+      final chosen = normal.map((e) => e.record.sentenceInTarget).toSet();
+      final rest = reviewable
+          .where((e) => !chosen.contains(e.record.sentenceInTarget))
+          .toList()
+        ..sort((a, b) {
+          final byWear = b.record.reviewCount.compareTo(a.record.reviewCount);
+          if (byWear != 0) return byWear;
+          return a.record.firstLearnedAt.compareTo(b.record.firstLearnedAt);
+        });
+      extras.addAll(rest.take(extraCount));
     }
+
+    final selected = [...normal, ...extras]..shuffle(_random);
+    return selected.map((e) => e.toItem()).toList();
+  }
+
+  /// 램프업을 뺀 평소 선정 로직. [reviewable] 풀에서 최대 [targetSize]개를
+  /// 고른다 — 세 갈래 경우는 [buildReviewSet] 문서 참고. 뽑힌 [_PoolEntry]
+  /// 목록을 (섞지 않은 채로) 돌려주며, 최종 결합된 세트를 섞는 것은 호출자
+  /// 몫이다.
+  List<_PoolEntry> _selectNormal(List<_PoolEntry> reviewable, int targetSize) {
+    if (reviewable.length <= targetSize) return [...reviewable];
 
     final byRecency = [...reviewable]
       ..sort((a, b) => b.record.firstLearnedAt.compareTo(a.record.firstLearnedAt));
-    final recent = byRecency.take(_recentCount).toList();
-    final remainder = byRecency.skip(_recentCount).toList();
+
+    // 목표가 작아서 "어제 배운 묶음"만으로 채워지는 경우 — 가장 최근에
+    // 학습한 순으로 그만큼만 뽑고, 가중 무작위 채움은 하지 않는다.
+    if (targetSize <= kYesterdayLearnedCount) {
+      return byRecency.take(targetSize).toList();
+    }
+
+    final recent = byRecency.take(kYesterdayLearnedCount).toList();
+    final remainder = byRecency.skip(kYesterdayLearnedCount).toList();
+    final randomCount = targetSize - kYesterdayLearnedCount;
 
     final now = DateTime.now();
     final weights = remainder
@@ -108,10 +187,9 @@ class ReviewSessionService {
               .toDouble(),
         )
         .toList();
-    final randomPicks = _weightedSampleWithoutReplacement(remainder, weights, _randomCount);
+    final randomPicks = _weightedSampleWithoutReplacement(remainder, weights, randomCount);
 
-    final selected = [...recent, ...randomPicks]..shuffle(_random);
-    return selected.map((e) => e.toItem()).toList();
+    return [...recent, ...randomPicks];
   }
 
   /// [items]에서 [weights]로 가중치를 준 무작위 비복원 추출(weighted sampling
@@ -163,12 +241,13 @@ class _PoolEntry {
   /// 이 항목을 화면/뷰모델이 사용하는 공개 모델인 [ReviewItem]으로
   /// 변환한다. [buildReviewSet]이 최종 결과 목록을 만들 때 각 항목에
   /// 호출한다.
-  /// 반환값: 대상/모국어 문장, 캐시된 오디오 경로, 사용된 음성을 담은
-  /// [ReviewItem].
+  /// 반환값: 대상/모국어 문장, 캐시된 오디오 경로, 사용된 음성, 그리고
+  /// 지금까지의 누적 복습 횟수를 담은 [ReviewItem].
   ReviewItem toItem() => ReviewItem(
         sentenceInTarget: record.sentenceInTarget,
         sentenceInNative: record.sentenceInNative,
         cachedAudioPath: location.path,
         voiceUsed: location.voice,
+        reviewCount: record.reviewCount,
       );
 }

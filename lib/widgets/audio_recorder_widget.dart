@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
@@ -10,6 +10,13 @@ import 'package:record/record.dart';
 
 const _waveformSampleCount = 48;
 const _samplingInterval = Duration(milliseconds: 80);
+
+/// 정규화된(0..1) 진폭이 이 값 이상인 샘플이 녹음 전체에서 한 번이라도
+/// 있으면 "말소리로 볼 만한 신호"로 간주한다. 조용히 속삭이는 정상적인
+/// 발화까지 무음으로 오판하지 않도록 여유 있게 낮은 값으로 잡았다 — 실제
+/// 기기별 마이크 감도에 따라 [_stop]의 진단 로그를 보면서 조정 가능하도록
+/// 상수로 뺐다.
+const _speechLikeAmplitudeThreshold = 0.12;
 
 /// 오실로스코프 스타일 파형 표시가 함께 있는 녹음/정지 단일 토글 버튼.
 /// ShadowingPronunciationScreen, WritingListeningScreen, ReviewScreen에서
@@ -20,8 +27,14 @@ class AudioRecorderWidget extends StatefulWidget {
   /// [onRecordingComplete] 콜백과 [enabled] 여부를 받아 위젯을 구성한다.
   const AudioRecorderWidget({super.key, required this.onRecordingComplete, this.enabled = true});
 
-  /// 녹음이 끝났을 때 녹음된 오디오 바이트(WAV)를 전달받는 콜백.
-  final ValueChanged<Uint8List> onRecordingComplete;
+  /// 녹음이 끝났을 때 호출된다. [bytes]는 녹음된 오디오 바이트(WAV)이고,
+  /// [hasSpeechLikeAmplitude]는 녹음 전체에 걸쳐 [_speechLikeAmplitudeThreshold]
+  /// 이상의 진폭이 한 번이라도 있었는지다 — false면 호출부(각 화면의
+  /// `analyzePronunciation`)는 Gemini 호출 자체를 건너뛰고
+  /// `PronunciationResult.noSpeechDetected()`로 즉시 처리해야 한다(불필요한
+  /// API 호출을 아끼기 위한 안전장치일 뿐, [bytes]는 이 경우에도 항상
+  /// 함께 전달된다 — 호출부가 원하면 그래도 쓸 수 있도록).
+  final void Function(Uint8List bytes, {required bool hasSpeechLikeAmplitude}) onRecordingComplete;
 
   /// false이면 녹음 버튼을 비활성(탭 불가, 흐리게 표시) 상태로 렌더링한다
   /// — 예를 들어 ReviewScreen은 학습자가 번역을 제출하기 전까지 이 값을
@@ -41,6 +54,17 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
   final Queue<double> _samples = Queue<double>.of(List.filled(_waveformSampleCount, 0.0));
   bool _isRecording = false;
   bool _isProcessing = false;
+
+  /// 지금 녹음 전체에 걸쳐 [_speechLikeAmplitudeThreshold] 이상의 진폭이
+  /// 한 번이라도 있었는지. [_start]에서 false로 리셋되고, 진폭 스트림
+  /// 리스너가 채우며, [_stop]이 최종적으로 [AudioRecorderWidget.
+  /// onRecordingComplete]에 그대로 전달한다. `_samples`는 파형 표시를 위한
+  /// 최근 [_waveformSampleCount]개(최근 ~3.8초)짜리 롤링 윈도우일 뿐이라
+  /// 녹음 전체를 판단하는 데는 쓸 수 없어, 이 플래그를 별도로 둔다.
+  bool _hasSpeechLikeAmplitude = false;
+
+  /// 진단/임계값 튜닝용: 이번 녹음에서 관측된 최대 정규화 진폭.
+  double _maxAmplitudeSeen = 0.0;
 
   /// 진폭 스트림 구독을 취소하고 [_recorder]를 dispose한다.
   @override
@@ -94,6 +118,8 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
       path: path,
     );
     if (!mounted) return;
+    _hasSpeechLikeAmplitude = false;
+    _maxAmplitudeSeen = 0.0;
     setState(() {
       _isRecording = true;
       _resetWaveform();
@@ -103,6 +129,8 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
       if (!mounted) return;
       // dBFS is typically in the range [-45, 0]; normalize to 0..1.
       final normalized = ((amplitude.current + 45) / 45).clamp(0.0, 1.0);
+      if (normalized > _maxAmplitudeSeen) _maxAmplitudeSeen = normalized;
+      if (normalized >= _speechLikeAmplitudeThreshold) _hasSpeechLikeAmplitude = true;
       setState(() {
         _samples.addLast(normalized);
         if (_samples.length > _waveformSampleCount) _samples.removeFirst();
@@ -150,6 +178,14 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
 
     final path = await _recorder.stop();
     if (!mounted) return;
+    final hasSpeechLikeAmplitude = _hasSpeechLikeAmplitude;
+    if (kDebugMode) {
+      debugPrint(
+        '[AudioRecorderWidget] recording finished: maxAmplitude='
+        '${_maxAmplitudeSeen.toStringAsFixed(3)}, threshold=$_speechLikeAmplitudeThreshold, '
+        'hasSpeechLikeAmplitude=$hasSpeechLikeAmplitude',
+      );
+    }
     setState(() {
       _isRecording = false;
       _isProcessing = true;
@@ -159,7 +195,7 @@ class _AudioRecorderWidgetState extends State<AudioRecorderWidget> {
     if (path != null) {
       final bytes = await File(path).readAsBytes();
       if (!mounted) return;
-      widget.onRecordingComplete(bytes);
+      widget.onRecordingComplete(bytes, hasSpeechLikeAmplitude: hasSpeechLikeAmplitude);
     }
     if (mounted) setState(() => _isProcessing = false);
   }

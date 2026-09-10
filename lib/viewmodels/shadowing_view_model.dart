@@ -26,7 +26,7 @@ class ShadowingState {
     this.dictationResult,
     this.dictationError,
     this.lastDictationInput,
-    this.sentenceHidden = false,
+    this.sentenceHidden = true,
     this.isAnalyzingPronunciation = false,
     this.pronunciationResult,
     this.pronunciationError,
@@ -249,9 +249,23 @@ class ShadowingViewModel extends Notifier<ShadowingState>
 
   /// ShadowingPronunciationScreen의 AudioRecorderWidget 녹음이 끝나면
   /// 호출된다. `GeminiService.analyzePronunciation`으로 녹음된 [audioBytes]를
-  /// 현재 문장과 비교해 발음 정확도를 채점한다.
-  Future<void> analyzePronunciation(Uint8List audioBytes) async {
+  /// 현재 문장과 비교해 발음 정확도를 채점한다. [hasSpeechLikeAmplitude]가
+  /// false면(녹음 전체에서 말소리로 볼 만한 진폭이 한 번도 없었음) Gemini
+  /// 호출 자체를 건너뛰고 `PronunciationResult.noSpeechDetected()`로 즉시
+  /// 처리한다(`AudioRecorderWidget.onRecordingComplete` 문서 참고).
+  Future<void> analyzePronunciation(
+    Uint8List audioBytes, {
+    required bool hasSpeechLikeAmplitude,
+  }) async {
     if (state.sentence == null) return;
+    if (!hasSpeechLikeAmplitude) {
+      state = state.copyWith(
+        isAnalyzingPronunciation: false,
+        clearPronunciationError: true,
+        pronunciationResult: PronunciationResult.noSpeechDetected(),
+      );
+      return;
+    }
     state = state.copyWith(isAnalyzingPronunciation: true, clearPronunciationError: true);
     try {
       final result = await ref

@@ -6,6 +6,17 @@ import '../utils/language_key.dart';
 import 'config_service.dart';
 import 'storage_location_service.dart';
 
+/// 언어별 TTS 클립 캐시 상한. 어떤 언어의 `audio_cache/<languageKey>/`
+/// 폴더가 이 수를 넘으면 [put]이 가장 오래 쓰이지 않은 항목부터 이 수까지
+/// 도로 밀어낸다([_evictLruIfNeeded]). 이건 최종 안전장치일 뿐이다 —
+/// 정상적인 사용에서는 그 전에 클립이 캐시를 떠난다(LRU로 밀려나거나,
+/// 어떤 문장이 `kReviewRetireThreshold`회 복습을 채워 [TtsCacheService.remove]로
+/// 명시적으로 제거되거나). 언어 폴더별로 각각 적용된다: 베트남어 캐시가
+/// 가득 차도 스페인어 항목이 밀려나지 않으며 그 반대도 마찬가지다.
+/// `ReviewSessionService`는 이 값과 실시간 언어별 개수([TtsCacheService.count])를
+/// 비교해 하루 복습량을 늘릴 시점(`kReviewRampUpThreshold`)을 정한다.
+const int kTtsCacheMaxEntries = 600;
+
 /// A cached TTS clip, plus the voice it was originally synthesized with.
 /// (캐시된 TTS 클립과, 원래 합성될 때 쓰인 음성을 함께 담는 값 객체.)
 /// [TtsCacheService.get]이 캐시 히트 시 반환하는 결과 타입이며,
@@ -64,8 +75,8 @@ class TtsCacheLocation {
 /// [languageStorageKey]) — resolved from the CURRENT `config.json` on every
 /// call, so switching target languages transparently switches which
 /// language's cache is read/written without any caller needing to know
-/// about it. The [_maxEntries] LRU cap applies per language folder: a full
-/// Vietnamese cache never evicts Spanish entries or vice versa.
+/// about it. The [kTtsCacheMaxEntries] LRU cap applies per language folder:
+/// a full Vietnamese cache never evicts Spanish entries or vice versa.
 /// (합성된 TTS 오디오를 (문장, 언어) 조합을 키로 디스크에 캐시해서, 같은
 /// 문장이 TTS API로 두 번 전송되는 일이 없게 한다 — 캐시 히트(나중에 같은
 /// 문장을 다시 재생하는 경우나, 앱을 재시작한 뒤 세션을 재개하는 경우
@@ -75,9 +86,9 @@ class TtsCacheLocation {
 /// + `.wav` 파일들([languageStorageKey] 참고) 아래에 저장되며, "지금 어느
 /// 언어인지"는 매번 호출 시점의 현재 `config.json`에서 판단한다. 그래서
 /// 대상 언어를 전환하면 호출자가 이를 전혀 몰라도 투명하게 읽고 쓰는
-/// 캐시가 그 언어의 것으로 바뀐다. [_maxEntries] LRU 상한은 언어 폴더별로
-/// 각각 적용된다: 베트남어 캐시가 가득 찬다고 스페인어 항목이 evict되는
-/// 일은 없으며 그 반대도 마찬가지다.)
+/// 캐시가 그 언어의 것으로 바뀐다. [kTtsCacheMaxEntries] LRU 상한은 언어
+/// 폴더별로 각각 적용된다: 베트남어 캐시가 가득 찬다고 스페인어 항목이
+/// evict되는 일은 없으며 그 반대도 마찬가지다.)
 ///
 /// `ttsCacheServiceProvider`(`service_providers.dart`)를 통해 노출되며,
 /// `GeminiService.speakCached`가 재생 전 캐시를 확인/저장할 때,
@@ -94,10 +105,6 @@ class TtsCacheService {
 
   final StorageLocationService _storageLocationService;
   final ConfigService _configService;
-
-  /// 언어별 폴더 하나당 유지하는 최대 캐시 항목 수. 이를 넘으면 LRU
-  /// (least-recently-used, 가장 오래 사용되지 않은 것)부터 evict된다.
-  static const _maxEntries = 100;
 
   /// Parent of every language's cache folder — used only by [clearCache]
   /// (full reset, all languages) since normal reads/writes always go
@@ -244,12 +251,24 @@ class TtsCacheService {
     return TtsCacheLocation(path: fileName, voice: voice);
   }
 
+  /// How many clips the CURRENT target language's cache holds right now —
+  /// just the manifest entry count (does not stat the `.wav` files). Cheap
+  /// enough to call on every review-set build.
+  /// (현재 대상 언어 캐시에 들어있는 클립 수 — manifest 항목 개수만 센다.)
+  ///
+  /// `ReviewSessionService.buildReviewSet`이 이 값을
+  /// `kReviewRampUpThreshold`와 비교해 그날 복습량을 늘릴지 판단할 때,
+  /// `SettingsDialog`가 "Cached sentences: N / [kTtsCacheMaxEntries]"를
+  /// 표시할 때 호출한다.
+  /// 반환값: 현재 언어 manifest의 항목 수(0 이상).
+  Future<int> count() async => (await _readManifest()).length;
+
   /// Stores newly-synthesized audio for (sentence, language), evicting the
-  /// least-recently-used entry first if this would exceed [_maxEntries]
-  /// (within this language's own folder only).
+  /// least-recently-used entry first if this would exceed
+  /// [kTtsCacheMaxEntries] (within this language's own folder only).
   /// (새로 합성된 (문장, 언어)의 오디오를 저장하며, 이로 인해
-  /// [_maxEntries]를 초과하게 되면(오직 이 언어 자신의 폴더 안에서만)
-  /// 가장 오래 사용되지 않은 항목부터 먼저 evict한다.)
+  /// [kTtsCacheMaxEntries]를 초과하게 되면(오직 이 언어 자신의 폴더
+  /// 안에서만) 가장 오래 사용되지 않은 항목부터 먼저 evict한다.)
   ///
   /// `GeminiService.speakCached`가 캐시 미스로 새로 TTS를 합성한 직후,
   /// 그 결과를 캐시에 저장하기 위해 호출한다.
@@ -280,16 +299,16 @@ class TtsCacheService {
     await _writeManifest(manifest);
   }
 
-  /// [manifest]의 항목 수가 [_maxEntries]를 초과하면, `lastUsedAt`이 가장
-  /// 오래된(least-recently-used) 항목부터 초과분만큼 manifest에서 제거하고
-  /// 대응하는 `.wav` 파일도 디스크에서 삭제한다. [put]이 새 항목을 추가한
-  /// 직후 호출하는 헬퍼다.
+  /// [manifest]의 항목 수가 [kTtsCacheMaxEntries]를 초과하면, `lastUsedAt`이
+  /// 가장 오래된(least-recently-used) 항목부터 초과분만큼 manifest에서
+  /// 제거하고 대응하는 `.wav` 파일도 디스크에서 삭제한다. [put]이 새 항목을
+  /// 추가한 직후 호출하는 헬퍼다.
   /// [manifest]: (변경 가능한) 현재 언어의 manifest Map.
   /// [dir]: 이 언어의 캐시 디렉터리(파일 삭제 경로 계산용).
   /// 부작용: [manifest]에서 오래된 항목을 제거하고, 대응하는 `.wav` 파일을
   /// 디스크에서 삭제한다.
   Future<void> _evictLruIfNeeded(Map<String, dynamic> manifest, Directory dir) async {
-    if (manifest.length <= _maxEntries) return;
+    if (manifest.length <= kTtsCacheMaxEntries) return;
 
     final byLastUsed = manifest.entries.toList()
       ..sort((a, b) {
@@ -298,7 +317,7 @@ class TtsCacheService {
         return aTime.compareTo(bTime);
       });
 
-    final overflow = manifest.length - _maxEntries;
+    final overflow = manifest.length - kTtsCacheMaxEntries;
     for (var i = 0; i < overflow; i++) {
       final entry = byLastUsed[i];
       manifest.remove(entry.key);
@@ -307,6 +326,33 @@ class TtsCacheService {
         final file = File('${dir.path}/$fileName');
         if (await file.exists()) await file.delete();
       }
+    }
+  }
+
+  /// Explicitly removes the cached clip for (sentence, language) — drops its
+  /// manifest entry and deletes its `.wav` file — right now, regardless of
+  /// how recently it was used. This is a SEPARATE deletion path from LRU
+  /// eviction ([_evictLruIfNeeded], which only fires on overflow): a clip
+  /// can now leave the cache either because it was pushed out by the
+  /// [kTtsCacheMaxEntries] cap, or because it was explicitly retired here.
+  /// (`ReviewViewModel.advance`가 어떤 문장의 `reviewCount`가
+  /// `kReviewRetireThreshold`에 도달했을 때 호출한다.)
+  /// [sentence]: 제거할 대상 언어 문장(캐시 키의 일부).
+  /// [language]: 대상 언어 이름(캐시 키의 일부).
+  /// 부작용: manifest에서 해당 항목을 제거하고 `.wav` 파일을 삭제한다.
+  /// 항목이 애초에 없으면 아무 일도 하지 않는다.
+  Future<void> remove({required String sentence, required String language}) async {
+    final manifest = await _readManifest();
+    final key = _manifestKey(sentence, language);
+    final entry = manifest.remove(key) as Map<String, dynamic>?;
+    if (entry == null) return;
+    await _writeManifest(manifest);
+
+    final fileName = entry['fileName'] as String?;
+    if (fileName != null) {
+      final dir = await _cacheDir();
+      final file = File('${dir.path}/$fileName');
+      if (await file.exists()) await file.delete();
     }
   }
 
@@ -331,10 +377,10 @@ class TtsCacheService {
 
   /// 32-bit FNV-1a hash, hex-encoded — deterministic and filesystem-safe.
   /// Not cryptographic; collisions are astronomically unlikely at the
-  /// ~100-entry scale this cache runs at (per language).
+  /// ~600-entry scale this cache runs at (per language).
   /// (32비트 FNV-1a 해시를 16진수로 인코딩한다 — 결정적(deterministic)이고
   /// 파일시스템에 안전하다. 암호학적 해시가 아니며, 이 캐시가 언어당
-  /// 운용되는 ~100개 규모에서는 충돌 가능성이 천문학적으로 낮다.)
+  /// 운용되는 ~600개 규모에서는 충돌 가능성이 천문학적으로 낮다.)
   ///
   /// [put]이 manifest 키로부터 파일시스템에 안전한 `.wav` 파일명을 만들
   /// 때 호출하는 헬퍼다.

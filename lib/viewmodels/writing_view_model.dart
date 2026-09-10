@@ -26,7 +26,7 @@ class WritingState {
     this.translationResult,
     this.translationError,
     this.lastUserTranslation,
-    this.sentenceHidden = false,
+    this.sentenceHidden = true,
     this.isAnalyzingPronunciation = false,
     this.pronunciationResult,
     this.pronunciationError,
@@ -275,13 +275,27 @@ class WritingViewModel extends Notifier<WritingState> with SentenceHiddenToggleM
 
   /// WritingListeningScreen의 AudioRecorderWidget 녹음이 끝나면 호출된다.
   /// `GeminiService.analyzePronunciation`으로 녹음된 [audioBytes]를 채점
-  /// 대상과 비교한다.
-  Future<void> analyzePronunciation(Uint8List audioBytes) async {
+  /// 대상과 비교한다. [hasSpeechLikeAmplitude]가 false면(녹음 전체에서
+  /// 말소리로 볼 만한 진폭이 한 번도 없었음) Gemini 호출 자체를 건너뛰고
+  /// `PronunciationResult.noSpeechDetected()`로 즉시 처리한다
+  /// (`AudioRecorderWidget.onRecordingComplete` 문서 참고).
+  Future<void> analyzePronunciation(
+    Uint8List audioBytes, {
+    required bool hasSpeechLikeAmplitude,
+  }) async {
     // 학습자 본인의 최종, 완전히 목표 언어로 된 제출본 — 방금
     // WritingListeningScreen이 `speakCached`로 재생해준 것과 동일한
     // 문장이다.
     final target = state.lastUserTranslation;
     if (target == null) return;
+    if (!hasSpeechLikeAmplitude) {
+      state = state.copyWith(
+        isAnalyzingPronunciation: false,
+        clearPronunciationError: true,
+        pronunciationResult: PronunciationResult.noSpeechDetected(),
+      );
+      return;
+    }
     state = state.copyWith(isAnalyzingPronunciation: true, clearPronunciationError: true);
     try {
       final result = await ref

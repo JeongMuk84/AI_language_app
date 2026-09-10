@@ -1,10 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../models/app_config.dart';
+import '../providers/service_providers.dart';
+import '../services/review_session_service.dart';
+import '../services/tts_cache_service.dart';
 import '../services/trial_gate_service.dart';
 import '../theme/app_theme.dart';
 import '../viewmodels/settings_view_model.dart';
@@ -37,6 +41,9 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   late final _targetController = TextEditingController(
     text: widget.initialConfig.targetLanguage ?? '',
   );
+  late final _dailyReviewCountController = TextEditingController(
+    text: '${widget.initialConfig.effectiveDailyReviewCount}',
+  );
   late AppThemeMode _themeMode = AppThemeMode.fromConfigValue(
     widget.initialConfig.effectiveThemeMode,
   );
@@ -45,12 +52,17 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   /// 버전 줄은 다이얼로그가 열리는 것을 막지 않고 임시 텍스트를 보여준다.
   PackageInfo? _packageInfo;
 
-  /// 화면이 처음 마운트될 때 [_loadPackageInfo]를 (완료를 기다리지 않고)
-  /// 시작시킨다.
+  /// 현재 대상 언어 TTS 캐시에 들어있는 문장 수. [_loadCacheCount]가 끝나기
+  /// 전까지는 null이며, 그동안 "Cached sentences: …"만 보여준다.
+  int? _cachedSentenceCount;
+
+  /// 화면이 처음 마운트될 때 [_loadPackageInfo]/[_loadCacheCount]를 (완료를
+  /// 기다리지 않고) 시작시킨다.
   @override
   void initState() {
     super.initState();
     unawaited(_loadPackageInfo());
+    unawaited(_loadCacheCount());
   }
 
   /// `PackageInfo.fromPlatform()`으로 앱 버전/빌드 번호를 읽어와
@@ -58,6 +70,26 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   Future<void> _loadPackageInfo() async {
     final info = await PackageInfo.fromPlatform();
     if (mounted) setState(() => _packageInfo = info);
+  }
+
+  /// `TtsCacheService.count()`로 현재 언어 캐시 문장 수를 읽어와
+  /// [_cachedSentenceCount]에 저장하고 다시 그리게 한다 — 사용자가 지금
+  /// "캐시를 쌓는 중"인지 "소진 모드"(590 이상)인지 참고로 볼 수 있게.
+  Future<void> _loadCacheCount() async {
+    final count = await ref.read(ttsCacheServiceProvider).count();
+    if (mounted) setState(() => _cachedSentenceCount = count);
+  }
+
+  /// "Daily Review Count" 필드 아래에 표시할 캐시 현황 문구를 만든다:
+  /// `Cached sentences: N / 600` 뒤에, 590을 넘어 복습이 가속 중이면
+  /// `· review boost: +K today`, 아직 쌓는 중이면 `· building up`을 붙인다.
+  String _cacheStatusLabel() {
+    final count = _cachedSentenceCount;
+    if (count == null) return 'Cached sentences: …';
+    final base = 'Cached sentences: $count / $kTtsCacheMaxEntries';
+    final extra = rampUpExtraCount(count);
+    if (extra > 0) return '$base  ·  review boost: +$extra today';
+    return '$base  ·  building up';
   }
 
   /// `PackageInfo`를 통해 `pubspec.yaml`의 `version` 필드(예: `1.0.0+1`)에서
@@ -75,6 +107,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   void dispose() {
     _nativeController.dispose();
     _targetController.dispose();
+    _dailyReviewCountController.dispose();
     super.dispose();
   }
 
@@ -98,6 +131,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
           nativeLanguage: _nativeController.text,
           targetLanguage: _targetController.text,
           themeMode: _themeMode,
+          dailyReviewCount: _dailyReviewCountController.text,
         );
     if (!mounted) return;
 
@@ -133,6 +167,17 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
             const Text('Language to learn'),
             const SizedBox(height: 4),
             TextField(controller: _targetController, enabled: !state.isSaving),
+            const SizedBox(height: 16),
+            const Text('Daily Review Count'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: _dailyReviewCountController,
+              enabled: !state.isSaving,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+            const SizedBox(height: 4),
+            Text(_cacheStatusLabel(), style: Theme.of(context).textTheme.labelSmall),
             const SizedBox(height: 16),
             const Text('Theme'),
             const SizedBox(height: 8),
